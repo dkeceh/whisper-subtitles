@@ -15,6 +15,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 - **Word-level timestamps** — "word" mode creates one subtitle per word with exact start/end times from Whisper
 - **Sentence splitting** — cues close on punctuation (`.!?`) and Whisper segment boundaries
 - **Music friendly** — if VAD finds almost no speech (e.g. a song), it automatically retries without VAD
+- **Lyrics alignment** — optional lyrics file: cue text and boundaries follow the lyric lines (markers like `[Intro]` / `[Verse]` are skipped); Whisper only supplies the timing
 - **Real progress** — popup shows model download (`model.bin: 46%|...`) and transcription (`0:57 / 1:37 transcribed`)
 - **Dual output** — subtitle track on the timeline + `.srt` file in `~/Movies/DaVinci Subtitles/`
 - **Diagnostic log** — `~/Movies/DaVinci Subtitles/last_run.log`
@@ -64,6 +65,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
    - **Model** — start with `small`; use `medium`/`large-v3` for better accuracy (especially Indonesian)
    - **Language** — pick the language manually when you know it (e.g. `id - Indonesian`); `auto` can be wrong on music
    - **Cue** — `sentence` per sentence, or `word` one subtitle per word
+   - **Lyrics file** — optional; when set, each subtitle line becomes one of your lyric lines (in order), timed by Whisper
    - **Silence gap / Max words / Chars per line** — cue splitting limits (ignored in `word` mode)
 4. Wait for the process — the popup shows progress; the first run downloads the model (one time only).
 5. Done: subtitles appear on the timeline (new subtitle track) and the `.srt` file is saved in `~/Movies/DaVinci Subtitles/`.

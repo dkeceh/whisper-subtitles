@@ -66,6 +66,7 @@ LANGUAGE = ""           # "" = auto detect; "id" = Indonesian; "en" = English; "
 SILENCE_GAP = 0.6       # seconds. A pause longer than this splits the cue and hides the text
 MAX_WORDS = 8           # maximum number of words per subtitle
 UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" = one subtitle per word
+LYRICS_PATH = ""        # optional lyrics file: cues follow its lines, [Intro]/[Verse] markers skipped
 MAX_CHARS_PER_LINE = {"vertical": 20, "horizontal": 42}  # chars per line (phone vs wide screen)
 MAX_LINES = 2           # number of text lines per subtitle
 # ===============================================================================
@@ -116,7 +117,7 @@ LOCK_FILE = os.path.join(OUT_DIR, ".whisper_running")
 
 # Transcription runs in a python that has faster-whisper.
 PHASE2_SRC = '''
-import sys, traceback
+import os, sys, traceback
 print("python:", sys.version.split()[0], sys.executable, flush=True)
 try:
     import json
@@ -161,7 +162,60 @@ try:
             lines.append(cur)
         return "\\n".join(lines)
 
+    def norm_word(text):
+        return "".join(ch for ch in text.lower() if ch.isalnum())
+
+    def read_lyrics(path):
+        try:
+            with open(path, encoding="utf-8", errors="replace") as handle:
+                raw_lines = [l.strip() for l in handle]
+        except OSError:
+            return []
+        return [l for l in raw_lines
+                if l and not (l.startswith("[") and l.endswith("]"))]   # skip [Intro] [Verse] ...
+
+    def align_lyrics(lines, segments):
+        """Match each lyric line to whisper word timings, in order. Text = the lyric line."""
+        words = [(norm_word(w.word), w.start, w.end)
+                 for seg in segments for w in (seg.words or []) if (w.word or "").strip()]
+        cues, wi, prev_end = [], 0, 0.0
+        for line in lines:
+            targets = [norm_word(t) for t in line.split() if norm_word(t)]
+            if not targets:
+                continue
+            start = end = None
+            ti, budget = 0, 12
+            while ti < len(targets) and wi < len(words) and budget > 0:
+                wt, ws, we = words[wi]
+                tg = targets[ti]
+                if wt == tg or (len(tg) >= 4 and (wt.startswith(tg) or tg.startswith(wt))):
+                    if start is None:
+                        start = ws
+                    end = we
+                    ti += 1
+                    wi += 1
+                elif ti + 1 < len(targets) and wt == targets[ti + 1]:
+                    ti += 1                              # word missing from audio
+                elif wi + 1 < len(words) and words[wi + 1][0] == tg:
+                    wi += 1                              # extra word in audio
+                else:
+                    wi += 1                              # whisper misheard - skip it
+                    budget -= 1
+            if start is None:                            # no match at all - park after previous cue
+                start = prev_end
+                end = prev_end + 2.0
+            cues.append([start, end, line.split()])
+            prev_end = end
+        return cues
+
     def build_cues(segments):
+        lyrics_path = job.get("lyrics") or ""
+        if lyrics_path:
+            lines = read_lyrics(lyrics_path)
+            if lines:
+                print("lyrics: aligning %d lines from %s"
+                      % (len(lines), os.path.basename(lyrics_path)), flush=True)
+                return align_lyrics(lines, segments)
         cues = []          # [start, end, [word, ...]]
         cur = None
         count = 0
@@ -233,7 +287,7 @@ FORM_SRC = '''
 import json, sys
 try:
     import tkinter as tk
-    from tkinter import messagebox, ttk
+    from tkinter import messagebox, ttk, filedialog
 except Exception as exc:
     print(json.dumps({"error": "tkinter: %s" % exc}))
     sys.exit(1)
@@ -271,9 +325,14 @@ unit = ttk.Combobox(box, values=["sentence - one subtitle per sentence",
 unit.set("word - one subtitle per word" if initial.get("unit") == "word"
          else "sentence - one subtitle per sentence")
 unit.grid(row=4, column=1, sticky="we", pady=4)
-gap = field(5, "Silence gap in seconds before text disappears", initial["gap"])
-words = field(6, "Max words per subtitle", initial["words"])
-chars = field(7, "Chars per line", initial["chars"])
+ttk.Label(box, text="Lyrics file (optional)").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 14))
+lyrics = tk.StringVar(value=initial.get("lyrics", ""))
+ttk.Entry(box, textvariable=lyrics, width=26).grid(row=5, column=1, sticky="we", pady=4)
+ttk.Button(box, text="...", width=3, command=lambda: lyrics.set(
+    filedialog.askopenfilename() or lyrics.get())).grid(row=5, column=2, sticky="w", padx=(4, 0), pady=4)
+gap = field(6, "Silence gap in seconds before text disappears", initial["gap"])
+words = field(7, "Max words per subtitle", initial["words"])
+chars = field(8, "Chars per line", initial["chars"])
 result = {}
 
 def start():
@@ -289,7 +348,8 @@ def start():
         return
     result.update(model=model.get(), lang=language.get().strip(), gap=gap_value,
                   words=words_value, chars=chars_value,
-                  unit="word" if unit.get().startswith("word") else "sentence")
+                  unit="word" if unit.get().startswith("word") else "sentence",
+                  lyrics=lyrics.get().strip())
     root.destroy()
 
 def cancel():
@@ -297,11 +357,11 @@ def cancel():
     root.destroy()
 
 buttons = ttk.Frame(box)
-buttons.grid(row=8, column=0, columnspan=2, sticky="e", pady=(16, 0))
+buttons.grid(row=9, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
 ttk.Button(buttons, text="Start", command=start).grid(row=0, column=1)
 ttk.Label(box, text="MIT License - free to use and modify, no warranty",
-          foreground="#999999").grid(row=9, column=0, columnspan=2, sticky="w", pady=(8, 0))
+          foreground="#999999").grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 0))
 root.bind("<Return>", lambda e: start())
 root.bind("<Escape>", lambda e: cancel())
 root.update_idletasks()
@@ -627,6 +687,7 @@ def ask_settings(chars_per_line):
     payload = json.dumps({
         "model": MODEL, "lang_display": language_label(LANGUAGE), "languages": LANGUAGES,
         "gap": SILENCE_GAP, "words": MAX_WORDS, "chars": chars_per_line, "unit": UNIT,
+        "lyrics": LYRICS_PATH,
         "status": ("model '%s' is already downloaded" % MODEL) if model_ready()
         else ("model '%s' will be downloaded now (one time)" % MODEL)})
     try:
@@ -647,7 +708,8 @@ def ask_settings(chars_per_line):
             lang = str(answer.get("lang_display", "")).split(" - ")[0].strip()
             return (MODEL, "" if lang.lower() in ("", "auto") else lang.lower(),
                     float(answer["gap"]), int(answer["words"]), int(answer["chars"]),
-                    "word" if answer.get("unit") == "word" else "sentence")
+                    "word" if answer.get("unit") == "word" else "sentence",
+                    str(answer.get("lyrics") or "").strip())
         except (KeyError, TypeError, ValueError):
             pass
     log_line("Tkinter form failed (%s) - using fallback dialog"
@@ -692,11 +754,11 @@ def ask_settings_line(chars_per_line):
             raise ValueError
     except ValueError:
         finish("Settings values are invalid. Try again.", failed=True)
-    return MODEL, ("" if language.lower() == "auto" else language), gap, words, chars, "sentence"
+    return MODEL, ("" if language.lower() == "auto" else language), gap, words, chars, "sentence", ""
 
 
 def main():
-    global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT
+    global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT, LYRICS_PATH
     NOTIFY = ("resolve" in globals())
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as handle:
@@ -738,7 +800,9 @@ def main():
         if NOTIFY:
             print("Cancelled by user.")
         return
-    MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, chars, UNIT = choice
+    MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, chars, UNIT, LYRICS_PATH = choice
+    if LYRICS_PATH and not os.path.isfile(LYRICS_PATH):
+        finish("Lyrics file not found: %s" % LYRICS_PATH, failed=True)
     MAX_CHARS_PER_LINE = dict(MAX_CHARS_PER_LINE, **{orientation: chars})
     max_chars = MAX_CHARS_PER_LINE[orientation] * MAX_LINES
     model_status = "model '%s' is already downloaded" % MODEL if model_ready() \
@@ -746,6 +810,8 @@ def main():
     settings = ("Language: %s | Cue: %s | Silence gap: %.1fs | Words/cue: %d | Chars/line: %d"
                 % (LANGUAGE or "auto", UNIT, SILENCE_GAP, MAX_WORDS,
                    MAX_CHARS_PER_LINE[orientation]))
+    if LYRICS_PATH:
+        settings += " | Lyrics: %s" % os.path.basename(LYRICS_PATH)
     notify("Starting: %s | %s | %.0f seconds of audio" % (settings, model_status, duration))
     show_progress("TRANSCRIPTION IN PROGRESS\n"
                   "Model %s | %.0f s of audio | %d clips\n"
@@ -764,7 +830,8 @@ def main():
     with open(job_file, "w", encoding="utf-8") as handle:
         json.dump({"wav": wav, "srt": srt, "model": MODEL, "lang": LANGUAGE,
                    "max_chars": max_chars, "max_words": MAX_WORDS, "gap": SILENCE_GAP,
-                   "line_width": MAX_CHARS_PER_LINE[orientation], "unit": UNIT}, handle)
+                   "line_width": MAX_CHARS_PER_LINE[orientation], "unit": UNIT,
+                   "lyrics": LYRICS_PATH}, handle)
     log_line("srt: %s" % srt)
 
     code, tail = run_phase2(find_python(), job_file, os.path.join(work, "progress.log"))
