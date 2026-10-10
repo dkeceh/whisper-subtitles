@@ -73,7 +73,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
    - **Model** — start with `small`; use `medium`/`large-v3` for better accuracy (especially Indonesian)
    - **Language** — pick the language manually when you know it (e.g. `id - Indonesian`); `auto` can be wrong on music
    - **Cue** — `sentence` per sentence, or `word` one subtitle per word
-   - **Lyrics file** — optional; when set, each subtitle line becomes one of your lyric lines (in order), timed by Whisper
+   - **Lyrics file** — optional, for songs: each subtitle line becomes one of your lyric lines, timed by Whisper (see *Using a Lyrics File* below)
    - **Output** — `subtitle` (default) or `textplus` (see the sections below)
    - **Silence gap / Max words / Chars per line** — cue splitting limits (ignored in `word` mode)
 4. Wait for the process — the popup shows progress; the first run downloads the model (one time only).
@@ -114,6 +114,39 @@ Text+ mode turns every subtitle line into its own **Text+ clip** on a new video 
 - Because every clip is a copy of the same template, changing the look later is easy: adjust the template's style, or edit any single clip independently.
 
 > Note: Text+ clips are *not* subtitles in Resolve's sense — they won't be burned in as a subtitle track or exported via *Export Subtitle*. Use them for the visual look; keep the `.srt`/subtitle track for the text data.
+
+### Using a Lyrics File (songs)
+
+For music, Whisper's transcription is often full of mishearings. A lyrics file makes **your text** the subtitle — Whisper only supplies the timing.
+
+**File format** — a plain `.txt` file, one lyric line per line, in song order:
+
+```
+[Intro]
+[Verse 1]
+Memandang langit dari atas bukit
+Udara segar menyentuh kulit
+
+[Chorus]
+Oh indahnya alam ini
+```
+
+- Lines fully wrapped in brackets (`[Intro]`, `[Verse 1]`, `[Chorus]`, `[Outro]`) are skipped automatically — they won't appear as subtitles.
+- Empty lines are ignored.
+- Everything else becomes one subtitle line each, in order.
+
+**How to use:**
+
+1. In the form, click the **`...`** button next to **Lyrics file** and pick your `.txt` file (or type the full path).
+2. Set **Language** to the song's language manually (e.g. `id - Indonesian`) — auto-detect is unreliable on music.
+3. Start as usual. Each lyric line becomes one cue, timed by Whisper's word timestamps, matched to the lines in order.
+
+**Good to know:**
+
+- The matching is word-by-word and forgiving (a Whisper mishearing like "Semuat" still matches your "Semua"), but it works best when Whisper gets the words roughly right — a bigger model (`medium`/`large-v3`) helps.
+- Works together with Text+ mode: the correct lyric text also ends up in the Text+ clips.
+- If a line cannot be matched at all, it is placed as a 2-second cue right after the previous line so nothing is silently dropped — check those spots and nudge them if needed.
+- The lyrics file is only used for timing/text alignment; the original `.srt` still contains exactly the lyric lines (without the bracket markers).
 
 ## License
 
