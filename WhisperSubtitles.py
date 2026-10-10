@@ -8,7 +8,7 @@ Last run log: ~/Movies/DaVinci Subtitles/last_run.log
 MODEL   : tiny / base / small / medium / large-v3 - larger = more accurate, slower.
 LANGUAGE: "" = auto detect, or a language code such as "id", "en".
 """
-# Copyright (c) 2026 Whisper Subtitles contributors
+# Copyright (c) 2026 dkeceh (http://github.com/dkeceh)
 #
 # MIT License - free to use, share, and modify, including commercial use.
 # The software is provided "as is", without warranty of any kind.
