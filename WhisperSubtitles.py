@@ -67,6 +67,8 @@ SILENCE_GAP = 0.6       # seconds. A pause longer than this splits the cue and h
 MAX_WORDS = 8           # maximum number of words per subtitle
 UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" = one subtitle per word
 LYRICS_PATH = ""        # optional lyrics file: cues follow its lines, [Intro]/[Verse] markers skipped
+OUTPUT = "subtitle"     # "subtitle" = subtitle track | "textplus" = Text+ clips from a Media Pool template
+TEXTPLUS_TEMPLATE = ""  # name of the Text+ template clip in the Media Pool (textplus mode)
 MAX_CHARS_PER_LINE = {"vertical": 20, "horizontal": 42}  # chars per line (phone vs wide screen)
 MAX_LINES = 2           # number of text lines per subtitle
 # ===============================================================================
@@ -330,9 +332,19 @@ lyrics = tk.StringVar(value=initial.get("lyrics", ""))
 ttk.Entry(box, textvariable=lyrics, width=26).grid(row=5, column=1, sticky="we", pady=4)
 ttk.Button(box, text="...", width=3, command=lambda: lyrics.set(
     filedialog.askopenfilename() or lyrics.get())).grid(row=5, column=2, sticky="w", padx=(4, 0), pady=4)
-gap = field(6, "Silence gap in seconds before text disappears", initial["gap"])
-words = field(7, "Max words per subtitle", initial["words"])
-chars = field(8, "Chars per line", initial["chars"])
+gap = field(8, "Silence gap in seconds before text disappears", initial["gap"])
+words = field(9, "Max words per subtitle", initial["words"])
+chars = field(10, "Chars per line", initial["chars"])
+ttk.Label(box, text="Output").grid(row=6, column=0, sticky="w", pady=4, padx=(0, 14))
+output = ttk.Combobox(box, values=["subtitle - subtitle track (default)",
+                                   "textplus - Text+ clips from a template"],
+                      state="readonly", width=24)
+output.set("textplus - Text+ clips from a template" if initial.get("output") == "textplus"
+           else "subtitle - subtitle track (default)")
+output.grid(row=6, column=1, sticky="we", pady=4)
+ttk.Label(box, text="Text+ template name").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 14))
+template = tk.StringVar(value=initial.get("template", ""))
+ttk.Entry(box, textvariable=template, width=26).grid(row=7, column=1, sticky="we", pady=4)
 result = {}
 
 def start():
@@ -349,7 +361,9 @@ def start():
     result.update(model=model.get(), lang=language.get().strip(), gap=gap_value,
                   words=words_value, chars=chars_value,
                   unit="word" if unit.get().startswith("word") else "sentence",
-                  lyrics=lyrics.get().strip())
+                  lyrics=lyrics.get().strip(),
+                  output="textplus" if output.get().startswith("textplus") else "subtitle",
+                  template=template.get().strip())
     root.destroy()
 
 def cancel():
@@ -357,11 +371,11 @@ def cancel():
     root.destroy()
 
 buttons = ttk.Frame(box)
-buttons.grid(row=9, column=0, columnspan=3, sticky="e", pady=(16, 0))
+buttons.grid(row=11, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
 ttk.Button(buttons, text="Start", command=start).grid(row=0, column=1)
 ttk.Label(box, text="MIT License - free to use and modify, no warranty",
-          foreground="#999999").grid(row=10, column=0, columnspan=3, sticky="w", pady=(8, 0))
+          foreground="#999999").grid(row=12, column=0, columnspan=3, sticky="w", pady=(8, 0))
 root.bind("<Return>", lambda e: start())
 root.bind("<Escape>", lambda e: cancel())
 root.update_idletasks()
@@ -674,6 +688,89 @@ def import_srt(resolve, path):
     return "The SRT is in the Media Pool - drag it onto the timeline"
 
 
+def srt_entries(path):
+    """[(start_seconds, end_seconds, text), ...]"""
+    def sec(stamp):
+        hours, minutes, rest = stamp.split(":")
+        seconds, millis = rest.split(",")
+        return int(hours) * 3600 + int(minutes) * 60 + int(seconds) + int(millis) / 1000.0
+    entries = []
+    with open(path, encoding="utf-8") as handle:
+        for block in handle.read().strip().split("\n\n"):
+            lines = block.split("\n")
+            if len(lines) < 3 or "-->" not in lines[1]:
+                continue
+            begin, end = lines[1].split(" --> ")
+            entries.append((sec(begin.strip()), sec(end.strip()), " ".join(lines[2:])))
+    return entries
+
+
+def find_pool_clip(folder, name):
+    for clip in folder.GetClipList() or []:
+        if clip.GetName() == name:
+            return clip
+    for sub in folder.GetSubFolderList() or []:
+        found = find_pool_clip(sub, name)
+        if found:
+            return found
+    return None
+
+
+def make_textplus(project, srt_path, template_name):
+    """One Text+ clip per SRT cue, copied from a template clip in the Media Pool."""
+    pool = project.GetMediaPool()
+    timeline = project.GetCurrentTimeline()
+    template = find_pool_clip(pool.GetRootFolder(), template_name)
+    if template is None:
+        return "Text+ template '%s' not found in the Media Pool." % template_name
+    try:
+        fps = float(project.GetSetting("timelineFrameRate"))
+    except (TypeError, ValueError):
+        return "Could not read the timeline frame rate."
+    try:
+        native_fps = float(template.GetClipProperty("FPS"))
+    except (TypeError, ValueError):
+        native_fps = fps
+    ratio = native_fps / fps
+    entries = srt_entries(srt_path)
+    if not entries:
+        return "The .srt has no cues - nothing to convert to Text+."
+    if not timeline.AddTrack("video"):
+        return "Failed to add a video track for Text+."
+    track = timeline.GetTrackCount("video")
+    base = timeline.GetStartFrame()
+    infos = []
+    for begin, end, _text in entries:
+        infos.append({"mediaPoolItem": template, "startFrame": 0,
+                      "endFrame": max(1, int(round((end - begin) * fps * ratio))),
+                      "trackIndex": track,
+                      "recordFrame": base + int(round(begin * fps)),
+                      "mediaType": 1})
+    items = pool.AppendToTimeline(infos)
+    if not items or len(items) != len(entries):
+        return "Text+ import: expected %d clips, got %s." % (
+            len(entries), len(items) if items else 0)
+    filled = 0
+    for item, (_begin, _end, text) in zip(items, entries):
+        try:
+            comp = item.GetFusionCompByIndex(1)
+            tools = (comp.GetToolList(False, "TextPlus") or {}) if comp else {}
+            tool = None
+            if hasattr(tools, "get"):          # python API returns {index: tool}
+                tool = tools.get(1) or next(iter(tools.values()), None)
+            elif tools:
+                tool = tools[0]
+            if tool is not None:
+                tool.SetInput("StyledText", text)
+                filled += 1
+        except Exception as exc:
+            log_line("textplus: could not set text on a clip (%s)" % exc)
+    if filled != len(entries):
+        return "Text+ clips added, but text was set on only %d of %d (check the template)." % (
+            filled, len(entries))
+    return ""
+
+
 def safe_name(value):
     return "".join(char for char in str(value or "timeline")
                    if char.isalnum() or char in "-_ ").strip() or "timeline"
@@ -687,7 +784,7 @@ def ask_settings(chars_per_line):
     payload = json.dumps({
         "model": MODEL, "lang_display": language_label(LANGUAGE), "languages": LANGUAGES,
         "gap": SILENCE_GAP, "words": MAX_WORDS, "chars": chars_per_line, "unit": UNIT,
-        "lyrics": LYRICS_PATH,
+        "lyrics": LYRICS_PATH, "output": OUTPUT, "template": TEXTPLUS_TEMPLATE,
         "status": ("model '%s' is already downloaded" % MODEL) if model_ready()
         else ("model '%s' will be downloaded now (one time)" % MODEL)})
     try:
@@ -706,10 +803,14 @@ def ask_settings(chars_per_line):
         try:
             MODEL = answer["model"]
             lang = str(answer.get("lang_display", "")).split(" - ")[0].strip()
-            return (MODEL, "" if lang.lower() in ("", "auto") else lang.lower(),
-                    float(answer["gap"]), int(answer["words"]), int(answer["chars"]),
-                    "word" if answer.get("unit") == "word" else "sentence",
-                    str(answer.get("lyrics") or "").strip())
+            return {"model": MODEL,
+                    "lang": "" if lang.lower() in ("", "auto") else lang.lower(),
+                    "gap": float(answer["gap"]), "words": int(answer["words"]),
+                    "chars": int(answer["chars"]),
+                    "unit": "word" if answer.get("unit") == "word" else "sentence",
+                    "lyrics": str(answer.get("lyrics") or "").strip(),
+                    "output": "textplus" if answer.get("output") == "textplus" else "subtitle",
+                    "template": str(answer.get("template") or "").strip()}
         except (KeyError, TypeError, ValueError):
             pass
     log_line("Tkinter form failed (%s) - using fallback dialog"
@@ -754,11 +855,14 @@ def ask_settings_line(chars_per_line):
             raise ValueError
     except ValueError:
         finish("Settings values are invalid. Try again.", failed=True)
-    return MODEL, ("" if language.lower() == "auto" else language), gap, words, chars, "sentence", ""
+    return {"model": MODEL, "lang": "" if language.lower() == "auto" else language,
+            "gap": gap, "words": words, "chars": chars, "unit": "sentence",
+            "lyrics": "", "output": "subtitle", "template": ""}
 
 
 def main():
     global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT, LYRICS_PATH
+    global OUTPUT, TEXTPLUS_TEMPLATE
     NOTIFY = ("resolve" in globals())
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as handle:
@@ -800,7 +904,14 @@ def main():
         if NOTIFY:
             print("Cancelled by user.")
         return
-    MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, chars, UNIT, LYRICS_PATH = choice
+    MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, chars, UNIT, LYRICS_PATH = \
+        choice["model"], choice["lang"], choice["gap"], choice["words"], \
+        choice["chars"], choice["unit"], choice["lyrics"]
+    OUTPUT = choice["output"]
+    TEXTPLUS_TEMPLATE = choice["template"]
+    if OUTPUT == "textplus" and not TEXTPLUS_TEMPLATE:
+        finish("Text+ mode needs a template name.\n"
+               "Create a Text+ template in the Media Pool and enter its name.", failed=True)
     if LYRICS_PATH and not os.path.isfile(LYRICS_PATH):
         finish("Lyrics file not found: %s" % LYRICS_PATH, failed=True)
     MAX_CHARS_PER_LINE = dict(MAX_CHARS_PER_LINE, **{orientation: chars})
@@ -812,6 +923,8 @@ def main():
                    MAX_CHARS_PER_LINE[orientation]))
     if LYRICS_PATH:
         settings += " | Lyrics: %s" % os.path.basename(LYRICS_PATH)
+    if OUTPUT == "textplus":
+        settings += " | Output: Text+ (%s)" % TEXTPLUS_TEMPLATE
     notify("Starting: %s | %s | %.0f seconds of audio" % (settings, model_status, duration))
     show_progress("TRANSCRIPTION IN PROGRESS\n"
                   "Model %s | %.0f s of audio | %d clips\n"
@@ -845,6 +958,8 @@ def main():
                "Try setting Language to Indonesian in the settings form.", failed=True)
 
     problem = import_srt(resolve, srt)
+    if not problem and OUTPUT == "textplus":
+        problem = make_textplus(project, srt, TEXTPLUS_TEMPLATE)
     message = "Subtitles done: %s" % os.path.basename(srt)
     if problem:
         message += "\n" + problem
