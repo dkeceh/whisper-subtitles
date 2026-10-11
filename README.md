@@ -18,7 +18,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 ## Features
 
 - **Offline & free** — works in DaVinci Resolve free, no cloud services
-- **Settings form** — model (`tiny` … `large-v3`), language (auto + 99 languages), cue per sentence or per word, silence gap, max words/chars
+- **Settings form** — model (`tiny` … `large-v3`, plus `large-v3-turbo`), language (auto + 99 languages), cue per sentence or per word, silence gap, max words/chars
 - **Three outputs** — subtitle track + `.srt` file every run; optional Text+ clips (see below)
 - **Text+ mode** — each cue becomes one Text+ clip on a new video track, copied from a template you design once in the Media Pool (fonts, colors, position, animation all follow the template)
 - **Word-level timestamps** — "word" mode creates one subtitle per word with exact start/end times from Whisper
@@ -38,7 +38,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 | faster-whisper | `pip install faster-whisper` |
 | ffmpeg | `brew install ffmpeg` |
 
-> RAM note: the `large-v3` model needs ~3GB and can be tight next to Resolve on an 8GB machine — use `medium` or `small` if needed.
+> RAM note: `large-v3` needs ~3GB and can be tight next to Resolve on 8GB — try `large-v3-turbo` (nearly the same accuracy, ~8x faster, 1.6GB) or `medium`/`small` first.
 
 ## Installation
 
@@ -70,7 +70,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 1. Open **DaVinci Resolve** and make sure the timeline you want subtitled is the active timeline.
 2. Go to **Workspace → Scripts → Utility → WhisperSubtitles**.
 3. Fill in the settings form and click **Start**:
-   - **Model** — start with `small`; use `medium`/`large-v3` for better accuracy (especially Indonesian)
+   - **Model** — start with `small`; use `medium` or `large-v3-turbo` for better accuracy (especially Indonesian); full `large-v3` if you have the RAM
    - **Language** — pick the language manually when you know it (e.g. `id - Indonesian`); `auto` can be wrong on music
    - **Cue** — `sentence` per sentence, or `word` one subtitle per word
    - **Lyrics file** — optional, for songs: each subtitle line becomes one of your lyric lines, timed by Whisper (see *Using a Lyrics File* below)
@@ -143,7 +143,7 @@ Oh indahnya alam ini
 
 **Good to know:**
 
-- The matching is word-by-word and forgiving (a Whisper mishearing like "Semuat" still matches your "Semua"), but it works best when Whisper gets the words roughly right — a bigger model (`medium`/`large-v3`) helps.
+- The matching is word-by-word and forgiving (a Whisper mishearing like "Semuat" still matches your "Semua"), but it works best when Whisper gets the words roughly right — a bigger model (`medium`/`large-v3-turbo`) helps.
 - Works together with Text+ mode: the correct lyric text also ends up in the Text+ clips.
 - If a line cannot be matched at all, it is placed as a 2-second cue right after the previous line so nothing is silently dropped — check those spots and nudge them if needed.
 - The lyrics file is only used for timing/text alignment; the original `.srt` still contains exactly the lyric lines (without the bracket markers).

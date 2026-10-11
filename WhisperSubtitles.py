@@ -5,7 +5,8 @@ Usage: open a timeline, then Workspace > Scripts > Utility > WhisperSubtitles.
 Result: a subtitle track on the timeline + a .srt file in ~/Movies/DaVinci Subtitles/
 Last run log: ~/Movies/DaVinci Subtitles/last_run.log
 
-MODEL   : tiny / base / small / medium / large-v3 - larger = more accurate, slower.
+MODEL   : tiny / base / small / medium / large-v3 / large-v3-turbo - larger = more accurate, slower
+          (large-v3-turbo = nearly large-v3 accuracy at ~8x speed, good on 8GB RAM).
 LANGUAGE: "" = auto detect, or a language code such as "id", "en".
 """
 # Copyright (c) 2026 dkeceh (http://github.com/dkeceh)
@@ -61,7 +62,7 @@ sys.stdout = _utf8(sys.stdout)
 sys.stderr = _utf8(sys.stderr)
 
 # ============================ SETTINGS - safe to edit ============================
-MODEL = "small"         # tiny / base / small / medium / large-v3 - larger = more accurate, slower
+MODEL = "small"         # tiny / base / small / medium / large-v3 / large-v3-turbo (fast large)
 LANGUAGE = ""           # "" = auto detect; "id" = Indonesian; "en" = English; "jv", "su", etc.
 SILENCE_GAP = 0.6       # seconds. A pause longer than this splits the cue and hides the text
 MAX_WORDS = 8           # maximum number of words per subtitle
@@ -314,7 +315,7 @@ def field(row, label, value):
     return var
 
 ttk.Label(box, text="Model").grid(row=2, column=0, sticky="w", pady=4, padx=(0, 14))
-model = ttk.Combobox(box, values=["tiny", "base", "small", "medium", "large-v3"], state="readonly", width=24)
+model = ttk.Combobox(box, values=["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"], state="readonly", width=24)
 model.set(initial["model"])
 model.grid(row=2, column=1, sticky="we", pady=4)
 ttk.Label(box, text="Language").grid(row=3, column=0, sticky="w", pady=4, padx=(0, 14))
@@ -825,8 +826,8 @@ def ask_settings_line(chars_per_line):
         return None
     picked_code, picked_out, _err = run_text(
         ["osascript", "-e",
-         'choose from list {"tiny","base","small","medium","large-v3"} with title "Whisper Subtitles" '
-         'with prompt "Model: larger = more accurate, slower" default items {"%s"}' % MODEL])
+         'choose from list {"tiny","base","small","medium","large-v3","large-v3-turbo"} with title "Whisper Subtitles" '
+         'with prompt "Model: larger = more accurate, slower; turbo = fast large-v3" default items {"%s"}' % MODEL])
     if picked_code != 0 or not picked_out.strip():
         return None
     MODEL = picked_out.strip()
