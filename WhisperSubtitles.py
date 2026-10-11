@@ -70,6 +70,7 @@ UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" =
 LYRICS_PATH = ""        # optional lyrics file: cues follow its lines, [Intro]/[Verse] markers skipped
 OUTPUT = "subtitle"     # "subtitle" = subtitle track | "textplus" = Text+ clips from a Media Pool template
 TEXTPLUS_TEMPLATE = ""  # name of the Text+ template clip in the Media Pool (textplus mode)
+ANIMATE = False         # textplus only: fade in/out + slide-up on every caption clip
 MAX_CHARS_PER_LINE = {"vertical": 20, "horizontal": 42}  # chars per line (phone vs wide screen)
 MAX_LINES = 2           # number of text lines per subtitle
 # ===============================================================================
@@ -346,6 +347,9 @@ output.grid(row=6, column=1, sticky="we", pady=4)
 ttk.Label(box, text="Text+ template name").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 14))
 template = tk.StringVar(value=initial.get("template", ""))
 ttk.Entry(box, textvariable=template, width=26).grid(row=7, column=1, sticky="we", pady=4)
+animate = tk.BooleanVar(value=bool(initial.get("animate")))
+ttk.Checkbutton(box, text="Animate (fade + slide up)", variable=animate).grid(
+    row=7, column=2, sticky="w", padx=(6, 0), pady=4)
 result = {}
 
 def start():
@@ -364,7 +368,7 @@ def start():
                   unit="word" if unit.get().startswith("word") else "sentence",
                   lyrics=lyrics.get().strip(),
                   output="textplus" if output.get().startswith("textplus") else "subtitle",
-                  template=template.get().strip())
+                  template=template.get().strip(), animate=bool(animate.get()))
     root.destroy()
 
 def cancel():
@@ -717,7 +721,34 @@ def find_pool_clip(folder, name):
     return None
 
 
-def make_textplus(project, srt_path, template_name):
+def animate_caption(tool, frames):
+    """Fade in/out + slide-up on one Text+ tool, keyframed over `frames` comp frames."""
+    if frames < 6:
+        return
+    fin = max(3, min(12, frames // 4))
+    fout = max(3, min(12, frames // 4))
+    hold = frames - fout
+    fade = {0: [0.0], fin: [1.0], hold: [1.0], frames: [0.0]}
+    for prop in ("Opacity1", "Opacity2", "Opacity3"):
+        try:
+            tool.AddModifier(prop, "BezierSpline")
+            spline = getattr(tool, prop).GetConnectedOutput().GetTool()
+            spline.SetKeyFrames(fade, True)
+        except Exception:
+            pass
+    slide = {0: [-0.05], fin: [0.0], hold: [0.0], frames: [-0.05]}
+    for prop in ("Offset1", "Offset2", "Offset3"):
+        try:
+            tool.AddModifier(prop, "XYPath")
+            xy = getattr(tool, prop).GetConnectedOutput().GetTool()
+            xy.AddModifier("Y", "BezierSpline")
+            y_spline = xy.Y.GetConnectedOutput().GetTool()
+            y_spline.SetKeyFrames(slide, True)
+        except Exception:
+            pass
+
+
+def make_textplus(project, srt_path, template_name, animate=False):
     """One Text+ clip per SRT cue, copied from a template clip in the Media Pool."""
     pool = project.GetMediaPool()
     timeline = project.GetCurrentTimeline()
@@ -752,7 +783,8 @@ def make_textplus(project, srt_path, template_name):
         return "Text+ import: expected %d clips, got %s." % (
             len(entries), len(items) if items else 0)
     filled = 0
-    for item, (_begin, _end, text) in zip(items, entries):
+    animated = 0
+    for item, (begin, end, text) in zip(items, entries):
         try:
             comp = item.GetFusionCompByIndex(1)
             tools = (comp.GetToolList(False, "TextPlus") or {}) if comp else {}
@@ -764,11 +796,16 @@ def make_textplus(project, srt_path, template_name):
             if tool is not None:
                 tool.SetInput("StyledText", text)
                 filled += 1
+                if animate:
+                    animate_caption(tool, max(6, int(round((end - begin) * fps))))
+                    animated += 1
         except Exception as exc:
             log_line("textplus: could not set text on a clip (%s)" % exc)
     if filled != len(entries):
         return "Text+ clips added, but text was set on only %d of %d (check the template)." % (
             filled, len(entries))
+    if animate and animated != len(entries):
+        log_line("textplus: animation applied on %d of %d clips" % (animated, len(entries)))
     return ""
 
 
@@ -786,6 +823,7 @@ def ask_settings(chars_per_line):
         "model": MODEL, "lang_display": language_label(LANGUAGE), "languages": LANGUAGES,
         "gap": SILENCE_GAP, "words": MAX_WORDS, "chars": chars_per_line, "unit": UNIT,
         "lyrics": LYRICS_PATH, "output": OUTPUT, "template": TEXTPLUS_TEMPLATE,
+        "animate": ANIMATE,
         "status": ("model '%s' is already downloaded" % MODEL) if model_ready()
         else ("model '%s' will be downloaded now (one time)" % MODEL)})
     try:
@@ -811,7 +849,8 @@ def ask_settings(chars_per_line):
                     "unit": "word" if answer.get("unit") == "word" else "sentence",
                     "lyrics": str(answer.get("lyrics") or "").strip(),
                     "output": "textplus" if answer.get("output") == "textplus" else "subtitle",
-                    "template": str(answer.get("template") or "").strip()}
+                    "template": str(answer.get("template") or "").strip(),
+                    "animate": bool(answer.get("animate"))}
         except (KeyError, TypeError, ValueError):
             pass
     log_line("Tkinter form failed (%s) - using fallback dialog"
@@ -858,12 +897,12 @@ def ask_settings_line(chars_per_line):
         finish("Settings values are invalid. Try again.", failed=True)
     return {"model": MODEL, "lang": "" if language.lower() == "auto" else language,
             "gap": gap, "words": words, "chars": chars, "unit": "sentence",
-            "lyrics": "", "output": "subtitle", "template": ""}
+            "lyrics": "", "output": "subtitle", "template": "", "animate": False}
 
 
 def main():
     global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT, LYRICS_PATH
-    global OUTPUT, TEXTPLUS_TEMPLATE
+    global OUTPUT, TEXTPLUS_TEMPLATE, ANIMATE
     NOTIFY = ("resolve" in globals())
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as handle:
@@ -910,6 +949,7 @@ def main():
         choice["chars"], choice["unit"], choice["lyrics"]
     OUTPUT = choice["output"]
     TEXTPLUS_TEMPLATE = choice["template"]
+    ANIMATE = bool(choice.get("animate")) and OUTPUT == "textplus"
     if OUTPUT == "textplus" and not TEXTPLUS_TEMPLATE:
         finish("Text+ mode needs a template name.\n"
                "Create a Text+ template in the Media Pool and enter its name.", failed=True)
@@ -925,7 +965,7 @@ def main():
     if LYRICS_PATH:
         settings += " | Lyrics: %s" % os.path.basename(LYRICS_PATH)
     if OUTPUT == "textplus":
-        settings += " | Output: Text+ (%s)" % TEXTPLUS_TEMPLATE
+        settings += " | Output: Text+ (%s)%s" % (TEXTPLUS_TEMPLATE, " + animate" if ANIMATE else "")
     notify("Starting: %s | %s | %.0f seconds of audio" % (settings, model_status, duration))
     show_progress("TRANSCRIPTION IN PROGRESS\n"
                   "Model %s | %.0f s of audio | %d clips\n"
@@ -960,7 +1000,7 @@ def main():
 
     problem = import_srt(resolve, srt)
     if not problem and OUTPUT == "textplus":
-        problem = make_textplus(project, srt, TEXTPLUS_TEMPLATE)
+        problem = make_textplus(project, srt, TEXTPLUS_TEMPLATE, ANIMATE)
     message = "Subtitles done: %s" % os.path.basename(srt)
     if problem:
         message += "\n" + problem
