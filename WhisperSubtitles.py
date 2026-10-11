@@ -70,7 +70,7 @@ UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" =
 LYRICS_PATH = ""        # optional lyrics file: cues follow its lines, [Intro]/[Verse] markers skipped
 OUTPUT = "subtitle"     # "subtitle" = subtitle track | "textplus" = Text+ clips from a Media Pool template
 TEXTPLUS_TEMPLATE = ""  # name of the Text+ template clip in the Media Pool (textplus mode)
-ANIMATE = False         # textplus only: fade in/out + slide-up on every caption clip
+ANIMATE = "none"        # textplus only: "fade" = fade+slide | "wordpop" = pop each word in turn
 MAX_CHARS_PER_LINE = {"vertical": 20, "horizontal": 42}  # chars per line (phone vs wide screen)
 MAX_LINES = 2           # number of text lines per subtitle
 # ===============================================================================
@@ -334,9 +334,6 @@ lyrics = tk.StringVar(value=initial.get("lyrics", ""))
 ttk.Entry(box, textvariable=lyrics, width=26).grid(row=5, column=1, sticky="we", pady=4)
 ttk.Button(box, text="...", width=3, command=lambda: lyrics.set(
     filedialog.askopenfilename() or lyrics.get())).grid(row=5, column=2, sticky="w", padx=(4, 0), pady=4)
-gap = field(8, "Silence gap in seconds before text disappears", initial["gap"])
-words = field(9, "Max words per subtitle", initial["words"])
-chars = field(10, "Chars per line", initial["chars"])
 ttk.Label(box, text="Output").grid(row=6, column=0, sticky="w", pady=4, padx=(0, 14))
 output = ttk.Combobox(box, values=["subtitle - subtitle track (default)",
                                    "textplus - Text+ clips from a template"],
@@ -347,9 +344,18 @@ output.grid(row=6, column=1, sticky="we", pady=4)
 ttk.Label(box, text="Text+ template name").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 14))
 template = tk.StringVar(value=initial.get("template", ""))
 ttk.Entry(box, textvariable=template, width=26).grid(row=7, column=1, sticky="we", pady=4)
-animate = tk.BooleanVar(value=bool(initial.get("animate")))
-ttk.Checkbutton(box, text="Animate (fade + slide up)", variable=animate).grid(
-    row=7, column=2, sticky="w", padx=(6, 0), pady=4)
+ttk.Label(box, text="Animation (Text+ only)").grid(row=8, column=0, sticky="w", pady=4, padx=(0, 14))
+animate = ttk.Combobox(box, values=["none - static captions",
+                                    "fade - fade in/out + slide up",
+                                    "word pop - each word pops in turn"],
+                       state="readonly", width=24)
+animate.set({"fade": "fade - fade in/out + slide up",
+             "wordpop": "word pop - each word pops in turn"}.get(
+                 initial.get("animate"), "none - static captions"))
+animate.grid(row=8, column=1, sticky="we", pady=4)
+gap = field(9, "Silence gap in seconds before text disappears", initial["gap"])
+words = field(10, "Max words per subtitle", initial["words"])
+chars = field(11, "Chars per line", initial["chars"])
 result = {}
 
 def start():
@@ -368,7 +374,9 @@ def start():
                   unit="word" if unit.get().startswith("word") else "sentence",
                   lyrics=lyrics.get().strip(),
                   output="textplus" if output.get().startswith("textplus") else "subtitle",
-                  template=template.get().strip(), animate=bool(animate.get()))
+                  template=template.get().strip(),
+                  animate="wordpop" if animate.get().startswith("word pop")
+                          else ("fade" if animate.get().startswith("fade") else "none"))
     root.destroy()
 
 def cancel():
@@ -376,11 +384,11 @@ def cancel():
     root.destroy()
 
 buttons = ttk.Frame(box)
-buttons.grid(row=11, column=0, columnspan=3, sticky="e", pady=(16, 0))
+buttons.grid(row=12, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
 ttk.Button(buttons, text="Start", command=start).grid(row=0, column=1)
 ttk.Label(box, text="MIT License - free to use and modify, no warranty",
-          foreground="#999999").grid(row=12, column=0, columnspan=3, sticky="w", pady=(8, 0))
+          foreground="#999999").grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
 root.bind("<Return>", lambda e: start())
 root.bind("<Escape>", lambda e: cancel())
 root.update_idletasks()
@@ -748,7 +756,39 @@ def animate_caption(tool, frames):
             pass
 
 
-def make_textplus(project, srt_path, template_name, animate=False):
+def animate_wordpop(tool, frames, text):
+    """Karaoke: each word pops (grows then shrinks) in turn, staggered by the Follower.
+
+    DelayType value is left at its default (Fusion steps through characters/words
+    using Delay, same technique AutoSubs uses). If this pops the whole sentence at
+    once instead of per word, try setting DelayType=2 (Words) in the Fallback log.
+    """
+    words = max(1, len((text or "").split()))
+    pop = 6
+    # spread the per-word Delay so the last word still finishes before the clip ends
+    stagger = max(1, min(5, (frames - pop) // max(1, words) // 2))
+    pop_keys = {0: [1.0], 2: [1.18], pop: [1.0]}
+    try:
+        tool.AddModifier("StyledText", "Follower")
+    except Exception:
+        return
+    follower = tool.StyledText.GetConnectedOutput().GetTool()
+    if follower is None:
+        return
+    try:
+        follower.SetInput("Delay", stagger, 0)
+    except Exception:
+        pass
+    for prop in ("WordSizeX", "WordSizeY"):
+        try:
+            follower.AddModifier(prop, "BezierSpline")
+            spline = getattr(follower, prop).GetConnectedOutput().GetTool()
+            spline.SetKeyFrames(pop_keys, True)
+        except Exception:
+            pass
+
+
+def make_textplus(project, srt_path, template_name, animate="none"):
     """One Text+ clip per SRT cue, copied from a template clip in the Media Pool."""
     pool = project.GetMediaPool()
     timeline = project.GetCurrentTimeline()
@@ -796,15 +836,19 @@ def make_textplus(project, srt_path, template_name, animate=False):
             if tool is not None:
                 tool.SetInput("StyledText", text)
                 filled += 1
-                if animate:
-                    animate_caption(tool, max(6, int(round((end - begin) * fps))))
+                clip_frames = max(6, int(round((end - begin) * fps)))
+                if animate == "fade":
+                    animate_caption(tool, clip_frames)
+                    animated += 1
+                elif animate == "wordpop":
+                    animate_wordpop(tool, clip_frames, text)
                     animated += 1
         except Exception as exc:
             log_line("textplus: could not set text on a clip (%s)" % exc)
     if filled != len(entries):
         return "Text+ clips added, but text was set on only %d of %d (check the template)." % (
             filled, len(entries))
-    if animate and animated != len(entries):
+    if animate in ("fade", "wordpop") and animated != len(entries):
         log_line("textplus: animation applied on %d of %d clips" % (animated, len(entries)))
     return ""
 
@@ -850,7 +894,7 @@ def ask_settings(chars_per_line):
                     "lyrics": str(answer.get("lyrics") or "").strip(),
                     "output": "textplus" if answer.get("output") == "textplus" else "subtitle",
                     "template": str(answer.get("template") or "").strip(),
-                    "animate": bool(answer.get("animate"))}
+                    "animate": str(answer.get("animate") or "none")}
         except (KeyError, TypeError, ValueError):
             pass
     log_line("Tkinter form failed (%s) - using fallback dialog"
@@ -897,7 +941,7 @@ def ask_settings_line(chars_per_line):
         finish("Settings values are invalid. Try again.", failed=True)
     return {"model": MODEL, "lang": "" if language.lower() == "auto" else language,
             "gap": gap, "words": words, "chars": chars, "unit": "sentence",
-            "lyrics": "", "output": "subtitle", "template": "", "animate": False}
+            "lyrics": "", "output": "subtitle", "template": "", "animate": "none"}
 
 
 def main():
@@ -949,7 +993,8 @@ def main():
         choice["chars"], choice["unit"], choice["lyrics"]
     OUTPUT = choice["output"]
     TEXTPLUS_TEMPLATE = choice["template"]
-    ANIMATE = bool(choice.get("animate")) and OUTPUT == "textplus"
+    _anim = str(choice.get("animate") or "none")
+    ANIMATE = _anim if (_anim in ("fade", "wordpop") and OUTPUT == "textplus") else "none"
     if OUTPUT == "textplus" and not TEXTPLUS_TEMPLATE:
         finish("Text+ mode needs a template name.\n"
                "Create a Text+ template in the Media Pool and enter its name.", failed=True)
@@ -965,7 +1010,8 @@ def main():
     if LYRICS_PATH:
         settings += " | Lyrics: %s" % os.path.basename(LYRICS_PATH)
     if OUTPUT == "textplus":
-        settings += " | Output: Text+ (%s)%s" % (TEXTPLUS_TEMPLATE, " + animate" if ANIMATE else "")
+        _anim_label = {"fade": " + fade", "wordpop": " + wordpop"}.get(ANIMATE, "")
+        settings += " | Output: Text+ (%s)%s" % (TEXTPLUS_TEMPLATE, _anim_label)
     notify("Starting: %s | %s | %.0f seconds of audio" % (settings, model_status, duration))
     show_progress("TRANSCRIPTION IN PROGRESS\n"
                   "Model %s | %.0f s of audio | %d clips\n"
