@@ -115,7 +115,7 @@ Text+ mode turns every subtitle line into its own **Text+ clip** on a new video 
 
 ### Output: Text+ karaoke (`textplus-karaoke`)
 
-Same as Text+ mode, plus a read-ahead preview: for every subtitle line, a second (dimmed, slightly lower) Text+ clip shows the *next* line's text for the same duration — like following lyrics. Uses the same template and the same one-time setup; the last line has no preview.
+Same as Text+ mode, plus a read-ahead preview: for every subtitle line, a second Text+ clip shows the *next* line's text for the same duration — like following lyrics. Style the preview however you want via a second Media Pool template (dimmer, lower, smaller — pick it in the *Text+ preview template* field); leave that field empty to reuse the main template as-is. The last line has no preview.
 
 ## License
 

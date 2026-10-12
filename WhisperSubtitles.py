@@ -69,6 +69,7 @@ MAX_WORDS = 8           # maximum number of words per subtitle
 UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" = one subtitle per word
 OUTPUT = "subtitle"     # "subtitle" | "textplus" | "textplus-karaoke" (Text+ + dimmed next-line preview)
 TEXTPLUS_TEMPLATE = ""  # name of the Text+ template clip in the Media Pool (textplus mode)
+TEXTPLUS_TEMPLATE2 = ""  # optional second template for the karaoke next-line preview
 MAX_CHARS_PER_LINE = {"vertical": 20, "horizontal": 42}  # chars per line (phone vs wide screen)
 MAX_LINES = 2           # number of text lines per subtitle
 # ===============================================================================
@@ -298,9 +299,16 @@ if initial.get("template") and initial["template"] not in _pool:
     _pool.insert(0, initial["template"])
 template_box = ttk.Combobox(box, textvariable=template, values=_pool, width=24)
 template_box.grid(row=6, column=1, sticky="we", pady=4)
-gap = field(7, "Silence gap in seconds before text disappears", initial["gap"])
-words = field(8, "Max words per subtitle", initial["words"])
-chars = field(9, "Chars per line", initial["chars"])
+ttk.Label(box, text="Text+ preview template (karaoke)").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 14))
+template2 = tk.StringVar(value=initial.get("template2", ""))
+_pool2 = list(initial.get("pool_names") or [])
+if initial.get("template2") and initial["template2"] not in _pool2:
+    _pool2.insert(0, initial["template2"])
+template2_box = ttk.Combobox(box, textvariable=template2, values=_pool2, width=24)
+template2_box.grid(row=7, column=1, sticky="we", pady=4)
+gap = field(8, "Silence gap in seconds before text disappears", initial["gap"])
+words = field(9, "Max words per subtitle", initial["words"])
+chars = field(10, "Chars per line", initial["chars"])
 result = {}
 
 def start():
@@ -320,7 +328,8 @@ def start():
                   output=("textplus-karaoke" if output.get().startswith("textplus-karaoke")
                           else "textplus" if output.get().startswith("textplus")
                           else "subtitle"),
-                  template=template.get().strip())
+                  template=template.get().strip(),
+                  template2=template2.get().strip())
     root.destroy()
 
 def cancel():
@@ -329,11 +338,11 @@ def cancel():
 
 root.protocol("WM_DELETE_WINDOW", cancel)
 buttons = ttk.Frame(box)
-buttons.grid(row=10, column=0, columnspan=3, sticky="e", pady=(16, 0))
+buttons.grid(row=11, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
 ttk.Button(buttons, text="Start", command=start).grid(row=0, column=1)
 ttk.Label(box, text="MIT License - free to use and modify, no warranty",
-          foreground="#999999").grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
+          foreground="#999999").grid(row=12, column=0, columnspan=3, sticky="w", pady=(8, 0))
 root.bind("<Return>", lambda e: start())
 root.bind("<Escape>", lambda e: cancel())
 root.update_idletasks()
@@ -806,17 +815,24 @@ def _textplus_tool(item, tries=6, wait=0.4):
     return None
 
 
-def make_textplus(project, srt_path, template_name, karaoke=False):
+def make_textplus(project, srt_path, template_name, karaoke=False, preview_template=""):
     """One Text+ clip per SRT cue, copied from a template clip in the Media Pool.
 
-    karaoke: also add a second, dimmed clip per cue showing the NEXT cue's text
-    (same timing as the current cue, pushed down) - a read-ahead preview line.
+    karaoke: also add a clip per cue showing the NEXT cue's text (same timing
+    as the current cue) - a read-ahead preview line. preview_template names a
+    second Media Pool template for those clips (user styles it however they
+    want - dimmer, lower, smaller); empty means reuse the main template as-is.
     """
     pool = project.GetMediaPool()
     timeline = project.GetCurrentTimeline()
     template = find_pool_clip(pool.GetRootFolder(), template_name)
     if template is None:
         return "Text+ template '%s' not found in the Media Pool." % template_name
+    ptemplate = template
+    if karaoke and preview_template and preview_template != template_name:
+        ptemplate = find_pool_clip(pool.GetRootFolder(), preview_template)
+        if ptemplate is None:
+            return "Text+ preview template '%s' not found in the Media Pool." % preview_template
     try:
         fps = float(project.GetSetting("timelineFrameRate"))
     except (TypeError, ValueError):
@@ -841,8 +857,8 @@ def make_textplus(project, srt_path, template_name, karaoke=False):
     track = timeline.GetTrackCount("video")
     base = timeline.GetStartFrame()
 
-    def _info(begin, end, track_index):
-        return {"mediaPoolItem": template, "startFrame": 0,
+    def _info(begin, end, track_index, media=None):
+        return {"mediaPoolItem": media or template, "startFrame": 0,
                 "endFrame": max(1, int(round((end - begin) * fps * ratio))),
                 "trackIndex": track_index,
                 "recordFrame": base + int(round(begin * fps)),
@@ -850,7 +866,7 @@ def make_textplus(project, srt_path, template_name, karaoke=False):
 
     infos = [_info(begin, end, track) for begin, end, _text in entries]
     # Preview clips: one per cue except the last, same timing as the cue they
-    # preview-for, on the track above so they render under the active line.
+    # preview-for, on a track below so the active line stays fully visible.
     previews = []  # (item_index_into_preview_items, next_text)
     if karaoke and len(entries) > 1:
         if not timeline.AddTrack("video"):
@@ -859,7 +875,7 @@ def make_textplus(project, srt_path, template_name, karaoke=False):
         p_infos = []
         for i in range(len(entries) - 1):
             begin, end, _ = entries[i]
-            p_infos.append(_info(begin, end, ptrack))
+            p_infos.append(_info(begin, end, ptrack, media=ptemplate))
             previews.append((i, entries[i + 1][2]))
         infos.extend(p_infos)
     items = pool.AppendToTimeline(infos)
@@ -888,15 +904,6 @@ def make_textplus(project, srt_path, template_name, karaoke=False):
             if tool is None:
                 continue
             _set_caption_text(tool, next_text)
-            # Dim + push down relative to the template's own position.
-            try:
-                tool.SetInput("Opacity", 0.35)
-            except Exception as exc:
-                log_line("textplus: preview opacity failed (%s)" % exc)
-            try:
-                tool.SetInput("Offset", [0.0, 0.12])
-            except Exception as exc:
-                log_line("textplus: preview offset failed (%s)" % exc)
         except Exception as exc:
             log_line("textplus: could not set preview text on a clip (%s)" % exc)
     return ""
@@ -924,6 +931,7 @@ def ask_settings(chars_per_line):
         "model": MODEL, "lang_display": language_label(LANGUAGE), "languages": LANGUAGES,
         "gap": SILENCE_GAP, "words": MAX_WORDS, "chars": chars_per_line, "unit": UNIT,
         "output": OUTPUT, "template": TEXTPLUS_TEMPLATE,
+        "template2": TEXTPLUS_TEMPLATE2,
         "pool_names": pool_names,
         "status": ("model '%s' is already downloaded" % MODEL) if model_ready()
         else ("model '%s' will be downloaded now (one time)" % MODEL)})
@@ -952,7 +960,8 @@ def ask_settings(chars_per_line):
                     "unit": "word" if answer.get("unit") == "word" else "sentence",
                     "output": (answer.get("output") if answer.get("output") in
                                ("textplus", "textplus-karaoke") else "subtitle"),
-                    "template": str(answer.get("template") or "").strip()}
+                    "template": str(answer.get("template") or "").strip(),
+                    "template2": str(answer.get("template2") or "").strip()}
         except (KeyError, TypeError, ValueError):
             pass
     log_line("Tkinter form failed (%s) - using fallback dialog"
@@ -999,12 +1008,12 @@ def ask_settings_line(chars_per_line):
         finish("Settings values are invalid. Try again.", failed=True)
     return {"model": MODEL, "lang": "" if language.lower() == "auto" else language,
             "gap": gap, "words": words, "chars": chars, "unit": "sentence",
-            "output": "subtitle", "template": ""}
+            "output": "subtitle", "template": "", "template2": ""}
 
 
 def main():
     global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT
-    global OUTPUT, TEXTPLUS_TEMPLATE
+    global OUTPUT, TEXTPLUS_TEMPLATE, TEXTPLUS_TEMPLATE2
     NOTIFY = ("resolve" in globals())
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as handle:
@@ -1051,6 +1060,7 @@ def main():
         choice["chars"], choice["unit"]
     OUTPUT = choice["output"]
     TEXTPLUS_TEMPLATE = choice["template"]
+    TEXTPLUS_TEMPLATE2 = choice.get("template2", "")
     if OUTPUT in ("textplus", "textplus-karaoke") and not TEXTPLUS_TEMPLATE:
         finish("Text+ mode needs a template name.\n"
                "Create a Text+ template in the Media Pool and enter its name.", failed=True)
@@ -1062,7 +1072,8 @@ def main():
                 % (LANGUAGE or "auto", UNIT, SILENCE_GAP, MAX_WORDS,
                    MAX_CHARS_PER_LINE[orientation]))
     if OUTPUT in ("textplus", "textplus-karaoke"):
-        _kind = " + next-line preview" if OUTPUT == "textplus-karaoke" else ""
+        _kind = (" + preview: %s" % TEXTPLUS_TEMPLATE2) if OUTPUT == "textplus-karaoke" and TEXTPLUS_TEMPLATE2 \
+            else " + preview: same template" if OUTPUT == "textplus-karaoke" else ""
         settings += " | Output: Text+ (%s)%s" % (TEXTPLUS_TEMPLATE, _kind)
     notify("Starting: %s | %s | %.0f seconds of audio" % (settings, model_status, duration))
     show_progress("TRANSCRIPTION IN PROGRESS\n"
@@ -1098,7 +1109,8 @@ def main():
     problem = import_srt(resolve, srt)
     if not problem and OUTPUT in ("textplus", "textplus-karaoke"):
         problem = make_textplus(project, srt, TEXTPLUS_TEMPLATE,
-                                karaoke=(OUTPUT == "textplus-karaoke"))
+                                karaoke=(OUTPUT == "textplus-karaoke"),
+                                preview_template=TEXTPLUS_TEMPLATE2)
     message = "Subtitles done: %s" % os.path.basename(srt)
     if problem:
         message += "\n" + problem
