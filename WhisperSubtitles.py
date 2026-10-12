@@ -426,11 +426,11 @@ def cancel():
     root.destroy()
 
 buttons = ttk.Frame(box)
-buttons.grid(row=12, column=0, columnspan=3, sticky="e", pady=(16, 0))
+buttons.grid(row=14, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
 ttk.Button(buttons, text="Start", command=start).grid(row=0, column=1)
 ttk.Label(box, text="MIT License - free to use and modify, no warranty",
-          foreground="#999999").grid(row=13, column=0, columnspan=3, sticky="w", pady=(8, 0))
+          foreground="#999999").grid(row=15, column=0, columnspan=3, sticky="w", pady=(8, 0))
 root.bind("<Return>", lambda e: start())
 root.bind("<Escape>", lambda e: cancel())
 root.update_idletasks()
