@@ -425,6 +425,7 @@ def cancel():
     result["cancelled"] = True
     root.destroy()
 
+root.protocol("WM_DELETE_WINDOW", cancel)
 buttons = ttk.Frame(box)
 buttons.grid(row=14, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
@@ -1295,6 +1296,8 @@ def ask_settings(chars_per_line):
             answer = {}
     if answer.get("cancelled"):
         return None
+    if code == 0 and not answer:
+        return None  # window closed (red button) without Start/Cancel
     if answer.get("model"):
         try:
             MODEL = answer["model"]
@@ -1343,7 +1346,7 @@ def ask_settings_line(chars_per_line):
          'buttons {"Cancel","Start"} default button "Start"'
          % (MODEL, status, initial)])
     if field_code != 0:
-        finish("Settings dialog failed: %s" % (field_err.strip()[:200] or "no message"), failed=True)
+        return None  # user cancelled (osascript -128) or dialog cannot show
     text = field_out.split("text returned:", 1)[-1].split(", button returned:")[0].strip()
     parts = [part.strip() for part in text.split(";")]
     if len(parts) != 4:
