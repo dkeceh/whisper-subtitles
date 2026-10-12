@@ -19,7 +19,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 
 - **Offline & free** — works in DaVinci Resolve free, no cloud services
 - **Settings form** — model (`tiny` … `large-v3`, plus `large-v3-turbo`), language (auto + 99 languages), cue per sentence or per word, silence gap, max words/chars
-- **Three outputs** — subtitle track + `.srt` file every run; optional Text+ clips (see below)
+- **Three outputs** — subtitle track + `.srt` file every run; optional Text+ clips, with or without a karaoke next-line preview (see below)
 - **Text+ mode** — each cue becomes one Text+ clip on a new video track, copied from a template you design once in the Media Pool (fonts, colors, position all follow the template)
 - **Word-level timestamps** — "word" mode creates one subtitle per word with exact start/end times from Whisper
 - **Sentence splitting** — cues close on punctuation (`.!?`) and Whisper segment boundaries
@@ -72,7 +72,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
    - **Model** — start with `small`; use `medium` or `large-v3-turbo` for better accuracy (especially Indonesian); full `large-v3` if you have the RAM
    - **Language** — pick the language manually when you know it (e.g. `id - Indonesian`); `auto` can be wrong on music
    - **Cue** — `sentence` per sentence, or `word` one subtitle per word
-   - **Output** — `subtitle` (default) or `textplus` (see the sections below); for Text+, enter the template name
+   - **Output** — `subtitle` (default), `textplus`, or `textplus-karaoke` (see the sections below); for Text+, enter the template name
    - **Silence gap / Max words / Chars per line** — cue splitting limits (ignored in `word` mode)
 4. Wait for the process — the popup shows progress; the first run downloads the model (one time only).
 5. Done — check the timeline for the new subtitle track (and Text+ track if enabled), and the `.srt` file in `~/Movies/DaVinci Subtitles/`.
@@ -112,6 +112,10 @@ Text+ mode turns every subtitle line into its own **Text+ clip** on a new video 
 - Because every clip is a copy of the same template, changing the look later is easy: adjust the template's style, or edit any single clip independently.
 
 > Note: Text+ clips are *not* subtitles in Resolve's sense — they won't be burned in as a subtitle track or exported via *Export Subtitle*. Use them for the visual look; keep the `.srt`/subtitle track for the text data.
+
+### Output: Text+ karaoke (`textplus-karaoke`)
+
+Same as Text+ mode, plus a read-ahead preview: for every subtitle line, a second (dimmed, slightly lower) Text+ clip shows the *next* line's text for the same duration — like following lyrics. Uses the same template and the same one-time setup; the last line has no preview.
 
 ## License
 
