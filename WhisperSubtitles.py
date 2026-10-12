@@ -69,9 +69,6 @@ MAX_WORDS = 8           # maximum number of words per subtitle
 UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" = one subtitle per word
 OUTPUT = "subtitle"     # "subtitle" = subtitle track | "textplus" = Text+ clips from a Media Pool template
 TEXTPLUS_TEMPLATE = ""  # name of the Text+ template clip in the Media Pool (textplus mode)
-ANIMATE = "none"        # textplus only: "fade" = fade+slide | "wordpop" = pop each word in turn
-PEAK = 1.3              # wordpop only: how far the active word grows (rest = 0.8)
-SPACING = ""            # wordpop only: WordSpacing override ("" = keep the template's)
 MAX_CHARS_PER_LINE = {"vertical": 20, "horizontal": 42}  # chars per line (phone vs wide screen)
 MAX_LINES = 2           # number of text lines per subtitle
 # ===============================================================================
@@ -172,9 +169,7 @@ try:
 
     def build_cues(segments):
         cues = []          # [start, end, [word, ...]]
-        times = []         # per cue: [(word_start, word_end), ...] (None if unknown)
         cur = None
-        cur_times = None
         count = 0
         per_word = job.get("unit") == "word"
 
@@ -189,11 +184,9 @@ try:
                 sys.stdout.flush()
 
         def close():
-            nonlocal cur, cur_times
+            nonlocal cur
             cues.append(cur)
-            times.append(cur_times)
             cur = None
-            cur_times = None
 
         for seg in segments:
             for w in (seg.words or []):
@@ -202,7 +195,6 @@ try:
                     continue
                 if per_word:
                     cues.append([w.start, w.end, [word]])
-                    times.append([(w.start, w.end)])
                     count += 1
                     tick(w.end)
                     continue
@@ -212,11 +204,9 @@ try:
                     close()
                 if cur is None:
                     cur = [w.start, w.end, [word]]
-                    cur_times = [(w.start, w.end)]
                 else:
                     cur[1] = w.end
                     cur[2].append(word)
-                    cur_times.append((w.start, w.end))
                 count += 1
                 if word[-1:] in ".!?":   # sentence ended - close the cue even if short
                     close()
@@ -226,7 +216,7 @@ try:
                 close()
         if cur:
             close()
-        return cues, times
+        return cues
 
     # Check speech coverage on whisper's own segments: cue spans are unreliable
     # for this (a nearly-empty transcription still yields short cues).
@@ -234,19 +224,14 @@ try:
     if total and speech < total * 0.15:  # VAD filtered nearly all - typical for music
         print("\\nVAD left almost no speech - retrying without it (music?)", flush=True)
         segments, info = run_transcribe(False)
-    cues, word_spans = build_cues(segments)
+    cues = build_cues(segments)
     if not cues:  # no word timestamps - fall back to raw segments
         cues = [[s.start, s.end, (s.text or "").split()] for s in segments]
-        word_spans = [None] * len(cues)
     print("cues:", len(cues), flush=True)
     with open(job["srt"], "w", encoding="utf-8") as out:
         for index, (start, end, words) in enumerate(cues, 1):
             out.write("%d\\n%s --> %s\\n%s\\n\\n"
                       % (index, fmt(start), fmt(end), wrap(words)))
-    # Sidecar for per-word timings: the Text+ word-pop animation needs each
-    # word's speech time, which the .srt itself does not carry.
-    with open(job["srt"] + ".words.json", "w", encoding="utf-8") as out:
-        json.dump(word_spans, out)
     print("language:", info.language, flush=True)
 except Exception:
     traceback.print_exc()
@@ -310,20 +295,9 @@ if initial.get("template") and initial["template"] not in _pool:
     _pool.insert(0, initial["template"])
 template_box = ttk.Combobox(box, textvariable=template, values=_pool, width=24)
 template_box.grid(row=6, column=1, sticky="we", pady=4)
-ttk.Label(box, text="Animation (Text+ only)").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 14))
-animate = ttk.Combobox(box, values=["none - static captions",
-                                    "fade - fade in/out + slide up",
-                                    "word pop - each word pops in turn"],
-                       state="readonly", width=24)
-animate.set({"fade": "fade - fade in/out + slide up",
-             "wordpop": "word pop - each word pops in turn"}.get(
-                 initial.get("animate"), "none - static captions"))
-animate.grid(row=7, column=1, sticky="we", pady=4)
-pop_size = field(8, "Word pop size (word pop only)", initial.get("peak", 1.3))
-spacing_override = field(9, "Word spacing (blank = template)", initial.get("spacing", ""))
-gap = field(10, "Silence gap in seconds before text disappears", initial["gap"])
-words = field(11, "Max words per subtitle", initial["words"])
-chars = field(12, "Chars per line", initial["chars"])
+gap = field(7, "Silence gap in seconds before text disappears", initial["gap"])
+words = field(8, "Max words per subtitle", initial["words"])
+chars = field(9, "Chars per line", initial["chars"])
 result = {}
 
 def start():
@@ -337,32 +311,11 @@ def start():
         messagebox.showerror("Whisper Subtitles",
                              "Gap, words, and chars must be valid numbers.", parent=root)
         return
-    try:
-        peak_value = float(pop_size.get().replace(",", "."))
-        if not 0.5 <= peak_value <= 5:
-            raise ValueError
-    except ValueError:
-        messagebox.showerror("Whisper Subtitles",
-                             "Word pop size must be a number between 0.5 and 5.", parent=root)
-        return
-    spacing_value = spacing_override.get().strip().replace(",", ".")
-    if spacing_value:
-        try:
-            if float(spacing_value) <= 0:
-                raise ValueError
-        except ValueError:
-            messagebox.showerror("Whisper Subtitles",
-                                 "Word spacing must be a positive number or blank.",
-                                 parent=root)
-            return
     result.update(model=model.get(), lang=language.get().strip(), gap=gap_value,
                   words=words_value, chars=chars_value,
                   unit="word" if unit.get().startswith("word") else "sentence",
                   output="textplus" if output.get().startswith("textplus") else "subtitle",
-                  template=template.get().strip(),
-                  animate="wordpop" if animate.get().startswith("word pop")
-                          else ("fade" if animate.get().startswith("fade") else "none"),
-                  peak=peak_value, spacing=spacing_value)
+                  template=template.get().strip())
     root.destroy()
 
 def cancel():
@@ -371,11 +324,11 @@ def cancel():
 
 root.protocol("WM_DELETE_WINDOW", cancel)
 buttons = ttk.Frame(box)
-buttons.grid(row=13, column=0, columnspan=3, sticky="e", pady=(16, 0))
+buttons.grid(row=10, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
 ttk.Button(buttons, text="Start", command=start).grid(row=0, column=1)
 ttk.Label(box, text="MIT License - free to use and modify, no warranty",
-          foreground="#999999").grid(row=14, column=0, columnspan=3, sticky="w", pady=(8, 0))
+          foreground="#999999").grid(row=11, column=0, columnspan=3, sticky="w", pady=(8, 0))
 root.bind("<Return>", lambda e: start())
 root.bind("<Escape>", lambda e: cancel())
 root.update_idletasks()
@@ -729,43 +682,6 @@ def collect_pool_names(folder, names):
         collect_pool_names(sub, names)
 
 
-def animate_caption(tool, frames):
-    """Fade in/out + slide-up on one Text+ tool, keyframed over `frames` comp frames."""
-    if frames < 6:
-        return
-    fin = max(3, min(12, frames // 4))
-    fout = max(3, min(12, frames // 4))
-    hold = frames - fout
-    fade = {0: [0.0], fin: [1.0], hold: [1.0], frames: [0.0]}
-    for prop in ("Opacity1", "Opacity2", "Opacity3"):
-        spline = _add_modifier_find(tool, prop, "BezierSpline")
-        if spline is None:
-            log_line("fade: spline %s not created" % prop)
-            continue
-        try:
-            spline.SetKeyFrames(fade, True)
-        except Exception as exc:
-            log_line("fade: %s fade failed (%s)" % (prop, exc))
-    slide = {0: [-0.05], fin: [0.0], hold: [0.0], frames: [-0.05]}
-    for prop in ("Offset1", "Offset2", "Offset3"):
-        xy = _add_modifier_find(tool, prop, "XYPath")
-        if xy is None:
-            log_line("fade: XYPath %s not created" % prop)
-            continue
-        y_spline = _add_modifier_find(xy, "Y", "BezierSpline")
-        if y_spline is None:
-            log_line("fade: Y spline %s not created" % prop)
-            continue
-        try:
-            y_spline.SetKeyFrames(slide, True)
-        except Exception as exc:
-            log_line("fade: %s slide failed (%s)" % (prop, exc))
-
-
-def _step_flags():
-    return {"Flags": {"StepIn": True}}
-
-
 def _connected_tool(tool, input_id, expect_regid=None):
     """Tool wired to `tool`'s input whose INPS_ID == input_id, or None.
 
@@ -815,26 +731,6 @@ def _find_modifier_by_type(tool, mod_type):
     return _connected_tool(tool, route[0], route[1])
 
 
-def _add_modifier_find(tool, input_id, mod_type):
-    """Attach `mod_type` to `tool`'s `input_id` and return it, or None.
-
-    AddModifier, then read the input's connection back by INPS_ID - unambiguous
-    whether the modifier is new or was already there. None means the input does
-    not exist or the add failed; callers must skip it rather than guess another
-    tool of the same type (that fallback once overwrote the Order keyframes
-    with the pop curve, killing the whole animation).
-    """
-    try:
-        tool.AddModifier(input_id, mod_type)
-    except Exception:
-        pass
-    found = _connected_tool(tool, input_id, expect_regid=mod_type)
-    if found is None:
-        log_line("modifier %s not attached to input %r (missing input or add failed)"
-                 % (mod_type, input_id))
-    return found
-
-
 def _set_caption_text(tool, text):
     """Set the caption text on the right tool in the StyledText chain.
 
@@ -864,213 +760,6 @@ def _set_caption_text(tool, text):
         return True
     except Exception:
         return False
-
-
-def animate_wordpop(comp, tool, frames, text, delays=None, peak=1.3, spacing=None):
-    """Karaoke: the line appears, then each word pops in turn (grows then settles).
-
-    Chain (from the auto-subs macro Resolve-Integration/autosubs-macro.setting):
-    Text+ <- Follower <- CLS, located and built through each input's INPS_ID
-    (see _connected_tool). comp.Execute (Lua) is unusable from Resolve's Python
-    API, so everything runs through AddModifier / SetKeyFrames directly.
-
-    Timing follows the macro, NOT an Order step-spline: Order is a mode
-    dropdown (6 = "Manual Curve", 0 = "Automatic" = all elements together).
-    Per-word stagger comes from the DelayByCharacterPosition spline (key =
-    word's start character index, value = delay in frames) - the shape the
-    macro writes in ConvertToDelayKeyframes. The Follower then replays the
-    WordSizeX/Y pop curve for each word once its delay elapses.
-
-    delays: optional per-word start frames relative to the clip (from
-    whisper's word timestamps), so each pop fires when the word is actually
-    spoken; None falls back to an even stagger.
-    peak: how far the active word grows (the form's "Word pop size").
-    spacing: optional WordSpacing override written after the mirror, so the
-    user value wins over the Text+ template's.
-
-    CLS placement matters: when the template already has a Follower on
-    Text+.StyledText, adding CLS to the Text+ would stack it ON TOP of the
-    Follower (wrong order) and it becomes unreachable via the Follower. In that
-    case CLS must be added to the Follower's Text input so it sits underneath.
-    """
-    words = len((text or "").split()) or 1
-    pop = 6  # frames for a single word's grow/shrink (rest size is 0.8)
-    if comp is None:
-        log_line("wordpop: no Fusion comp for this clip")
-        return
-    _t0 = time.time()
-    follower = _find_modifier_by_type(tool, "StyledTextFollower")
-    if follower is None:
-        # Fresh Text+: add CLS first (lands under), then Follower on top.
-        _add_modifier_find(tool, "StyledText", "StyledTextCLS")
-        follower = _add_modifier_find(tool, "StyledText", "StyledTextFollower")
-    cls = None
-    if follower is not None:
-        cls = _find_modifier_by_type(follower, "StyledTextCLS")
-        if cls is None:
-            # Template had a Follower but no CLS: add CLS under the Follower so
-            # the Follower knows character/word boundaries (without it Order does
-            # not map to words and the pop never shows).
-            cls = _add_modifier_find(follower, "Text", "StyledTextCLS")
-    log_line("wordpop: cls=%r follower=%r (lookup %.2fs)"
-             % (cls, follower, time.time() - _t0))
-    if follower is None:
-        log_line("wordpop: Follower not created")
-        return
-    try:
-        if cls is not None:
-            cls.SetInput("SelectElement", 1)
-        follower.SetInput("SelectElement", 2)
-        follower.SetInput("Delay", 0)
-        follower.SetInput("DelayType", 0)
-    except Exception as exc:
-        log_line("wordpop: Follower config failed (%s)" % exc)
-    # Layout spacing: with the chain in place the CLS generates the styled
-    # text and its own layout values ride along, so the Text+ LineSpacing /
-    # WordSpacing controls stop reaching the render. Mirror the Text+ values
-    # onto CLS/Follower on every run (read only when the Text+ input is not
-    # connected - the usual deadlock rule). The Text+ itself is only read -
-    # it keeps the template's original value; the log prints cls/follower
-    # values from BEFORE the write so old and new spacing can be compared.
-    for prop in ("LineSpacing", "WordSpacing"):
-        try:
-            src = _connected_tool(tool, prop)
-            if src is not None:
-                log_line("wordpop: Text+ %s connected to %r; mirror skipped "
-                         "(set the value on Follower1/CLS instead)"
-                         % (prop, src.GetName()))
-                continue
-            spacing = tool.GetInput(prop)
-            if spacing is None:
-                log_line("wordpop: Text+ %s unreadable; mirror skipped" % prop)
-                continue
-            nodes = [(n, t) for n, t in ((cls, "cls"), (follower, "follower"))
-                     if n is not None]
-            before = " ".join("%s=%r" % (t, n.GetInput(prop)) for n, t in nodes)
-            for node, _tag in nodes:
-                node.SetInput(prop, spacing)
-            after = " ".join("%s=%r" % (t, n.GetInput(prop)) for n, t in nodes)
-            log_line("wordpop: %s Text+ (original)=%r | before: %s | after: %s"
-                     % (prop, spacing, before or "-", after or "-"))
-        except Exception as exc:
-            log_line("wordpop: %s mirror skipped (%s)" % (prop, exc))
-    # Optional user override (form "Word spacing"): applied after the mirror
-    # so the typed value wins over the Text+ template's.
-    if spacing is not None:
-        for node, tag in ((cls, "cls"), (follower, "follower")):
-            if node is None:
-                continue
-            try:
-                node.SetInput("WordSpacing", spacing)
-                log_line("wordpop: WordSpacing override %r -> %s (readback %r)"
-                         % (spacing, tag, node.GetInput("WordSpacing")))
-            except Exception as exc:
-                log_line("wordpop: WordSpacing override on %s failed (%s)" % (tag, exc))
-    # Word start times: real speech timing when the caller has whisper's
-    # per-word spans (delays in frames, relative to the clip start);
-    # otherwise an even stagger inside the clip. The pop's hold lasts until
-    # the median gap to the next word, so the shrink lands near the next
-    # word's pop even when speech is not perfectly even.
-    if delays and len(delays) == words:
-        starts = []
-        prev = 0
-        for d in delays:
-            prev = max(prev, min(int(d), max(0, frames - pop)))
-            starts.append(prev)
-        gaps = [starts[i + 1] - starts[i] for i in range(words - 1)]
-        hold = sorted(gaps)[len(gaps) // 2] if gaps else pop
-        hold = max(4, min(16, hold))
-        log_line("wordpop: using speech timing (starts %s, hold %d)"
-                 % (starts, hold))
-    else:
-        stagger = max(2, min(8, (frames - pop) // max(1, words))) if words > 1 else pop
-        starts = [i * stagger for i in range(words)]
-        hold = stagger
-    _t1 = time.time()
-    # Order is a MODE dropdown (auto-subs macro: 6 = "Manual Curve", 0 =
-    # "Automatic" = all elements together); a stepped spline on it does NOT
-    # select words - that made every word pop at once. Per-word stagger comes
-    # from DelayByCharacterPosition instead (same shape as the macro's
-    # ConvertToDelayKeyframes: key = word start char index, value = delay).
-    stale = _connected_tool(follower, "Order")
-    if stale is not None:
-        try:
-            follower.ConnectInput("Order", None)
-            stale = None
-            log_line("wordpop: removed stale Order spline connection")
-        except Exception as exc:
-            log_line("wordpop: stale Order connection not removed (%s)" % exc)
-    try:
-        follower.SetInput("Order", 6)
-        if stale is None:
-            log_line("wordpop: Order=%r (Manual Curve)" % follower.GetInput("Order"))
-        else:
-            log_line("wordpop: Order set to 6 (readback skipped: input still connected)")
-    except Exception as exc:
-        log_line("wordpop: Order set failed (%s)" % exc)
-    delay = _add_modifier_find(follower, "DelayByCharacterPosition", "BezierSpline")
-    if delay is not None:
-        try:
-            delay.DeleteKeyFrames(0)  # fresh BezierSpline ships a default keyframe
-        except Exception:
-            pass
-        try:
-            keys = {}
-            pos = 0
-            for i, w in enumerate((text or "").split()):
-                keys[pos] = [starts[i], _step_flags()]
-                pos += len(w) + 1
-            delay.SetKeyFrames(keys, True)
-            try:
-                back = str(delay.GetKeyFrames())
-            except Exception:
-                back = "<unreadable>"
-            log_line("wordpop: delay curve set (%d keys), readback=%s"
-                     % (len(keys), back[:300]))
-        except Exception as exc:
-            log_line("wordpop: delay curve failed (%s)" % exc)
-    else:
-        log_line("wordpop: DelayByCharacterPosition spline not created")
-    # Pop curve, replayed by the Follower in each word's local time: grow
-    # 0.8 -> peak, stay grown until roughly the NEXT word's turn (local
-    # `hold` = median gap), then shrink back while the next word grows - the
-    # highlight moves instead of accumulating (otherwise every word ends up
-    # big). Local frames: 0-2 grow, 2..hold hold, hold..hold+2 shrink.
-    pop_keys = {0: [0.8], 2: [peak], hold: [peak], hold + 2: [0.8]}
-    for prop in ("WordSizeX", "WordSizeY"):
-        spline = _add_modifier_find(follower, prop, "BezierSpline")
-        if spline is None:
-            log_line("wordpop: %s spline not created" % prop)
-            continue
-        try:
-            spline.DeleteKeyFrames(0)
-        except Exception:
-            pass
-        try:
-            spline.SetKeyFrames(pop_keys, True)
-            log_line("wordpop: %s pop keyframes set" % prop)
-        except Exception as exc:
-            log_line("wordpop: %s pop failed (%s)" % (prop, exc))
-    # Text+.StyledText is connected to the Follower, so a raw value there is
-    # overridden - and writing/reading a connected input can deadlock the UI
-    # thread. Both CLS and Follower take the caption on input "Text" (auto-subs
-    # sets cls.SetInput("Text", ...); CLS has no usable "StyledText" input).
-    target = cls if cls is not None else follower
-    where = "cls" if cls is not None else "follower"
-    try:
-        target.SetInput("Text", text)
-        try:
-            back = target.GetInput("Text")
-        except Exception:
-            back = "<unreadable>"
-        log_line("wordpop: text set on %s.Text, readback=%r" % (where, back))
-    except Exception as exc:
-        log_line("wordpop: text set on %s.Text failed (%s); not writing the "
-                 "connected Text+ input (deadlock risk)" % (where, exc))
-    log_line("wordpop: %d words, peak %.2f, pop %d frames, hold %d frames, "
-             "last word at frame %d of %d (splines %.2fs, total %.2fs)"
-             % (words, peak, pop, hold, starts[-1], frames,
-                time.time() - _t1, time.time() - _t0))
 
 
 def _first_tool(comp, type_name):
@@ -1112,7 +801,7 @@ def _textplus_tool(item, tries=6, wait=0.4):
     return None
 
 
-def make_textplus(project, srt_path, template_name, animate="none", peak=1.3, spacing=""):
+def make_textplus(project, srt_path, template_name):
     """One Text+ clip per SRT cue, copied from a template clip in the Media Pool."""
     pool = project.GetMediaPool()
     timeline = project.GetCurrentTimeline()
@@ -1131,22 +820,6 @@ def make_textplus(project, srt_path, template_name, animate="none", peak=1.3, sp
     entries = srt_entries(srt_path)
     if not entries:
         return "The .srt has no cues - nothing to convert to Text+."
-    # Per-word speech times written next to the .srt by the transcriber
-    # (absent for imported SRTs - wordpop then uses even stagger).
-    spans = None
-    try:
-        with open(srt_path + ".words.json", encoding="utf-8") as handle:
-            loaded = json.load(handle)
-        if isinstance(loaded, list) and len(loaded) == len(entries):
-            spans = loaded
-    except Exception:
-        spans = None
-    spacing_override = None
-    if spacing:
-        try:
-            spacing_override = float(str(spacing).replace(",", "."))
-        except ValueError:
-            log_line("textplus: word spacing %r is not a number; ignored" % spacing)
     if not timeline.AddTrack("video"):
         return "Failed to add a video track for Text+."
     track = timeline.GetTrackCount("video")
@@ -1163,43 +836,20 @@ def make_textplus(project, srt_path, template_name, animate="none", peak=1.3, sp
         return "Text+ import: expected %d clips, got %s." % (
             len(entries), len(items) if items else 0)
     filled = 0
-    animated = 0
-    for index, (item, (begin, end, text)) in enumerate(zip(items, entries)):
+    for item, (_begin, _end, text) in zip(items, entries):
         try:
             # _textplus_tool retries because the Fusion comp is not always built
             # the instant AppendToTimeline returns; a single attempt silently
             # skipped some clips (26 of 34 filled).
             tool = _textplus_tool(item)
             if tool is not None:
-                comp = item.GetFusionCompByIndex(1)
-                # wordpop sets the text inline (reuses the CLS/Follower it already
-                # located, so a second lookup here would just rescan inputs).
-                if animate != "wordpop":
-                    _set_caption_text(tool, text)
+                _set_caption_text(tool, text)
                 filled += 1
-                clip_frames = max(6, int(round((end - begin) * fps)))
-                if animate == "fade":
-                    animate_caption(tool, clip_frames)
-                    animated += 1
-                elif animate == "wordpop":
-                    # Whisper word spans -> per-word pop delays in frames.
-                    delays = None
-                    spans_i = spans[index] if spans else None
-                    if isinstance(spans_i, list) and len(spans_i) == len(text.split()):
-                        delays = [max(0, int(round((w[0] - begin) * fps)))
-                                  for w in spans_i if isinstance(w, (list, tuple)) and w]
-                        if len(delays) != len(text.split()):
-                            delays = None
-                    animate_wordpop(comp, tool, clip_frames, text, delays,
-                                    peak, spacing_override)
-                    animated += 1
         except Exception as exc:
             log_line("textplus: could not set text on a clip (%s)" % exc)
     if filled != len(entries):
         return "Text+ clips added, but text was set on only %d of %d (check the template)." % (
             filled, len(entries))
-    if animate in ("fade", "wordpop") and animated != len(entries):
-        log_line("textplus: animation applied on %d of %d clips" % (animated, len(entries)))
     return ""
 
 
@@ -1225,7 +875,7 @@ def ask_settings(chars_per_line):
         "model": MODEL, "lang_display": language_label(LANGUAGE), "languages": LANGUAGES,
         "gap": SILENCE_GAP, "words": MAX_WORDS, "chars": chars_per_line, "unit": UNIT,
         "output": OUTPUT, "template": TEXTPLUS_TEMPLATE,
-        "animate": ANIMATE, "pool_names": pool_names, "peak": PEAK, "spacing": SPACING,
+        "pool_names": pool_names,
         "status": ("model '%s' is already downloaded" % MODEL) if model_ready()
         else ("model '%s' will be downloaded now (one time)" % MODEL)})
     try:
@@ -1246,20 +896,13 @@ def ask_settings(chars_per_line):
         try:
             MODEL = answer["model"]
             lang = str(answer.get("lang") or answer.get("lang_display") or "").split(" - ")[0].strip()
-            try:
-                peak = float(str(answer.get("peak") or "1.3").replace(",", "."))
-            except ValueError:
-                peak = 1.3
             return {"model": MODEL,
                     "lang": "" if lang.lower() in ("", "auto") else lang.lower(),
                     "gap": float(answer["gap"]), "words": int(answer["words"]),
                     "chars": int(answer["chars"]),
                     "unit": "word" if answer.get("unit") == "word" else "sentence",
                     "output": "textplus" if answer.get("output") == "textplus" else "subtitle",
-                    "template": str(answer.get("template") or "").strip(),
-                    "animate": str(answer.get("animate") or "none"),
-                    "peak": peak,
-                    "spacing": str(answer.get("spacing") or "").strip()}
+                    "template": str(answer.get("template") or "").strip()}
         except (KeyError, TypeError, ValueError):
             pass
     log_line("Tkinter form failed (%s) - using fallback dialog"
@@ -1306,13 +949,12 @@ def ask_settings_line(chars_per_line):
         finish("Settings values are invalid. Try again.", failed=True)
     return {"model": MODEL, "lang": "" if language.lower() == "auto" else language,
             "gap": gap, "words": words, "chars": chars, "unit": "sentence",
-            "output": "subtitle", "template": "", "animate": "none",
-            "peak": 1.3, "spacing": ""}
+            "output": "subtitle", "template": ""}
 
 
 def main():
     global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT
-    global OUTPUT, TEXTPLUS_TEMPLATE, ANIMATE, PEAK, SPACING
+    global OUTPUT, TEXTPLUS_TEMPLATE
     NOTIFY = ("resolve" in globals())
     os.makedirs(OUT_DIR, exist_ok=True)
     with open(LOG_FILE, "a", encoding="utf-8") as handle:
@@ -1359,13 +1001,6 @@ def main():
         choice["chars"], choice["unit"]
     OUTPUT = choice["output"]
     TEXTPLUS_TEMPLATE = choice["template"]
-    _anim = str(choice.get("animate") or "none")
-    ANIMATE = _anim if (_anim in ("fade", "wordpop") and OUTPUT == "textplus") else "none"
-    try:
-        PEAK = float(choice.get("peak") or 1.3)
-    except (TypeError, ValueError):
-        PEAK = 1.3
-    SPACING = str(choice.get("spacing") or "").strip()
     if OUTPUT == "textplus" and not TEXTPLUS_TEMPLATE:
         finish("Text+ mode needs a template name.\n"
                "Create a Text+ template in the Media Pool and enter its name.", failed=True)
@@ -1377,8 +1012,7 @@ def main():
                 % (LANGUAGE or "auto", UNIT, SILENCE_GAP, MAX_WORDS,
                    MAX_CHARS_PER_LINE[orientation]))
     if OUTPUT == "textplus":
-        _anim_label = {"fade": " + fade", "wordpop": " + wordpop"}.get(ANIMATE, "")
-        settings += " | Output: Text+ (%s)%s" % (TEXTPLUS_TEMPLATE, _anim_label)
+        settings += " | Output: Text+ (%s)" % TEXTPLUS_TEMPLATE
     notify("Starting: %s | %s | %.0f seconds of audio" % (settings, model_status, duration))
     show_progress("TRANSCRIPTION IN PROGRESS\n"
                   "Model %s | %.0f s of audio | %d clips\n"
@@ -1412,7 +1046,7 @@ def main():
 
     problem = import_srt(resolve, srt)
     if not problem and OUTPUT == "textplus":
-        problem = make_textplus(project, srt, TEXTPLUS_TEMPLATE, ANIMATE, PEAK, SPACING)
+        problem = make_textplus(project, srt, TEXTPLUS_TEMPLATE)
     message = "Subtitles done: %s" % os.path.basename(srt)
     if problem:
         message += "\n" + problem
