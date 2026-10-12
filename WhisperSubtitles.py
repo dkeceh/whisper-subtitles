@@ -67,7 +67,6 @@ LANGUAGE = ""           # "" = auto detect; "id" = Indonesian; "en" = English; "
 SILENCE_GAP = 0.6       # seconds. A pause longer than this splits the cue and hides the text
 MAX_WORDS = 8           # maximum number of words per subtitle
 UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" = one subtitle per word
-LYRICS_PATH = ""        # optional lyrics file: cues follow its lines, [Intro]/[Verse] markers skipped
 OUTPUT = "subtitle"     # "subtitle" = subtitle track | "textplus" = Text+ clips from a Media Pool template
 TEXTPLUS_TEMPLATE = ""  # name of the Text+ template clip in the Media Pool (textplus mode)
 ANIMATE = "none"        # textplus only: "fade" = fade+slide | "wordpop" = pop each word in turn
@@ -171,58 +170,7 @@ try:
     def norm_word(text):
         return "".join(ch for ch in text.lower() if ch.isalnum())
 
-    def read_lyrics(path):
-        try:
-            with open(path, encoding="utf-8", errors="replace") as handle:
-                raw_lines = [l.strip() for l in handle]
-        except OSError:
-            return []
-        return [l for l in raw_lines
-                if l and not (l.startswith("[") and l.endswith("]"))]   # skip [Intro] [Verse] ...
-
-    def align_lyrics(lines, segments):
-        """Match each lyric line to whisper word timings, in order. Text = the lyric line."""
-        words = [(norm_word(w.word), w.start, w.end)
-                 for seg in segments for w in (seg.words or []) if (w.word or "").strip()]
-        cues, wi, prev_end = [], 0, 0.0
-        for line in lines:
-            targets = [norm_word(t) for t in line.split() if norm_word(t)]
-            if not targets:
-                continue
-            start = end = None
-            ti, budget = 0, 12
-            while ti < len(targets) and wi < len(words) and budget > 0:
-                wt, ws, we = words[wi]
-                tg = targets[ti]
-                if wt == tg or (len(tg) >= 4 and (wt.startswith(tg) or tg.startswith(wt))):
-                    if start is None:
-                        start = ws
-                    end = we
-                    ti += 1
-                    wi += 1
-                elif ti + 1 < len(targets) and wt == targets[ti + 1]:
-                    ti += 1                              # word missing from audio
-                elif wi + 1 < len(words) and words[wi + 1][0] == tg:
-                    wi += 1                              # extra word in audio
-                else:
-                    wi += 1                              # whisper misheard - skip it
-                    budget -= 1
-            if start is None:                            # no match at all - park after previous cue
-                start = prev_end
-                end = prev_end + 2.0
-            cues.append([start, end, line.split()])
-            prev_end = end
-        return cues
-
     def build_cues(segments):
-        lyrics_path = job.get("lyrics") or ""
-        if lyrics_path:
-            lines = read_lyrics(lyrics_path)
-            if lines:
-                print("lyrics: aligning %d lines from %s"
-                      % (len(lines), os.path.basename(lyrics_path)), flush=True)
-                aligned = align_lyrics(lines, segments)
-                return aligned, [None] * len(aligned)
         cues = []          # [start, end, [word, ...]]
         times = []         # per cue: [(word_start, word_end), ...] (None if unknown)
         cur = None
@@ -280,11 +228,13 @@ try:
             close()
         return cues, times
 
-    cues, word_spans = build_cues(segments)
-    if sum(c[1] - c[0] for c in cues) < total * 0.15:  # VAD filtered nearly all - typical for music
+    # Check speech coverage on whisper's own segments: cue spans are unreliable
+    # for this (a nearly-empty transcription still yields short cues).
+    speech = sum(max(0.0, s.end - s.start) for s in segments)
+    if total and speech < total * 0.15:  # VAD filtered nearly all - typical for music
         print("\\nVAD left almost no speech - retrying without it (music?)", flush=True)
         segments, info = run_transcribe(False)
-        cues, word_spans = build_cues(segments)
+    cues, word_spans = build_cues(segments)
     if not cues:  # no word timestamps - fall back to raw segments
         cues = [[s.start, s.end, (s.text or "").split()] for s in segments]
         word_spans = [None] * len(cues)
@@ -346,26 +296,21 @@ unit = ttk.Combobox(box, values=["sentence - one subtitle per sentence",
 unit.set("word - one subtitle per word" if initial.get("unit") == "word"
          else "sentence - one subtitle per sentence")
 unit.grid(row=4, column=1, sticky="we", pady=4)
-ttk.Label(box, text="Lyrics file (optional)").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 14))
-lyrics = tk.StringVar(value=initial.get("lyrics", ""))
-ttk.Entry(box, textvariable=lyrics, width=26).grid(row=5, column=1, sticky="we", pady=4)
-ttk.Button(box, text="...", width=3, command=lambda: lyrics.set(
-    filedialog.askopenfilename() or lyrics.get())).grid(row=5, column=2, sticky="w", padx=(4, 0), pady=4)
-ttk.Label(box, text="Output").grid(row=6, column=0, sticky="w", pady=4, padx=(0, 14))
+ttk.Label(box, text="Output").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 14))
 output = ttk.Combobox(box, values=["subtitle - subtitle track (default)",
                                    "textplus - Text+ clips from a template"],
                       state="readonly", width=24)
 output.set("textplus - Text+ clips from a template" if initial.get("output") == "textplus"
            else "subtitle - subtitle track (default)")
-output.grid(row=6, column=1, sticky="we", pady=4)
-ttk.Label(box, text="Text+ template (Media Pool)").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 14))
+output.grid(row=5, column=1, sticky="we", pady=4)
+ttk.Label(box, text="Text+ template (Media Pool)").grid(row=6, column=0, sticky="w", pady=4, padx=(0, 14))
 template = tk.StringVar(value=initial.get("template", ""))
 _pool = list(initial.get("pool_names") or [])
 if initial.get("template") and initial["template"] not in _pool:
     _pool.insert(0, initial["template"])
 template_box = ttk.Combobox(box, textvariable=template, values=_pool, width=24)
-template_box.grid(row=7, column=1, sticky="we", pady=4)
-ttk.Label(box, text="Animation (Text+ only)").grid(row=8, column=0, sticky="w", pady=4, padx=(0, 14))
+template_box.grid(row=6, column=1, sticky="we", pady=4)
+ttk.Label(box, text="Animation (Text+ only)").grid(row=7, column=0, sticky="w", pady=4, padx=(0, 14))
 animate = ttk.Combobox(box, values=["none - static captions",
                                     "fade - fade in/out + slide up",
                                     "word pop - each word pops in turn"],
@@ -373,12 +318,12 @@ animate = ttk.Combobox(box, values=["none - static captions",
 animate.set({"fade": "fade - fade in/out + slide up",
              "wordpop": "word pop - each word pops in turn"}.get(
                  initial.get("animate"), "none - static captions"))
-animate.grid(row=8, column=1, sticky="we", pady=4)
-pop_size = field(9, "Word pop size (word pop only)", initial.get("peak", 1.3))
-spacing_override = field(10, "Word spacing (blank = template)", initial.get("spacing", ""))
-gap = field(11, "Silence gap in seconds before text disappears", initial["gap"])
-words = field(12, "Max words per subtitle", initial["words"])
-chars = field(13, "Chars per line", initial["chars"])
+animate.grid(row=7, column=1, sticky="we", pady=4)
+pop_size = field(8, "Word pop size (word pop only)", initial.get("peak", 1.3))
+spacing_override = field(9, "Word spacing (blank = template)", initial.get("spacing", ""))
+gap = field(10, "Silence gap in seconds before text disappears", initial["gap"])
+words = field(11, "Max words per subtitle", initial["words"])
+chars = field(12, "Chars per line", initial["chars"])
 result = {}
 
 def start():
@@ -413,7 +358,6 @@ def start():
     result.update(model=model.get(), lang=language.get().strip(), gap=gap_value,
                   words=words_value, chars=chars_value,
                   unit="word" if unit.get().startswith("word") else "sentence",
-                  lyrics=lyrics.get().strip(),
                   output="textplus" if output.get().startswith("textplus") else "subtitle",
                   template=template.get().strip(),
                   animate="wordpop" if animate.get().startswith("word pop")
@@ -427,11 +371,11 @@ def cancel():
 
 root.protocol("WM_DELETE_WINDOW", cancel)
 buttons = ttk.Frame(box)
-buttons.grid(row=14, column=0, columnspan=3, sticky="e", pady=(16, 0))
+buttons.grid(row=13, column=0, columnspan=3, sticky="e", pady=(16, 0))
 ttk.Button(buttons, text="Cancel", command=cancel).grid(row=0, column=0, padx=(0, 8))
 ttk.Button(buttons, text="Start", command=start).grid(row=0, column=1)
 ttk.Label(box, text="MIT License - free to use and modify, no warranty",
-          foreground="#999999").grid(row=15, column=0, columnspan=3, sticky="w", pady=(8, 0))
+          foreground="#999999").grid(row=14, column=0, columnspan=3, sticky="w", pady=(8, 0))
 root.bind("<Return>", lambda e: start())
 root.bind("<Escape>", lambda e: cancel())
 root.update_idletasks()
@@ -1188,7 +1132,7 @@ def make_textplus(project, srt_path, template_name, animate="none", peak=1.3, sp
     if not entries:
         return "The .srt has no cues - nothing to convert to Text+."
     # Per-word speech times written next to the .srt by the transcriber
-    # (absent for imported SRTs / lyrics - wordpop then uses even stagger).
+    # (absent for imported SRTs - wordpop then uses even stagger).
     spans = None
     try:
         with open(srt_path + ".words.json", encoding="utf-8") as handle:
@@ -1280,7 +1224,7 @@ def ask_settings(chars_per_line):
     payload = json.dumps({
         "model": MODEL, "lang_display": language_label(LANGUAGE), "languages": LANGUAGES,
         "gap": SILENCE_GAP, "words": MAX_WORDS, "chars": chars_per_line, "unit": UNIT,
-        "lyrics": LYRICS_PATH, "output": OUTPUT, "template": TEXTPLUS_TEMPLATE,
+        "output": OUTPUT, "template": TEXTPLUS_TEMPLATE,
         "animate": ANIMATE, "pool_names": pool_names, "peak": PEAK, "spacing": SPACING,
         "status": ("model '%s' is already downloaded" % MODEL) if model_ready()
         else ("model '%s' will be downloaded now (one time)" % MODEL)})
@@ -1301,7 +1245,7 @@ def ask_settings(chars_per_line):
     if answer.get("model"):
         try:
             MODEL = answer["model"]
-            lang = str(answer.get("lang_display", "")).split(" - ")[0].strip()
+            lang = str(answer.get("lang") or answer.get("lang_display") or "").split(" - ")[0].strip()
             try:
                 peak = float(str(answer.get("peak") or "1.3").replace(",", "."))
             except ValueError:
@@ -1311,7 +1255,6 @@ def ask_settings(chars_per_line):
                     "gap": float(answer["gap"]), "words": int(answer["words"]),
                     "chars": int(answer["chars"]),
                     "unit": "word" if answer.get("unit") == "word" else "sentence",
-                    "lyrics": str(answer.get("lyrics") or "").strip(),
                     "output": "textplus" if answer.get("output") == "textplus" else "subtitle",
                     "template": str(answer.get("template") or "").strip(),
                     "animate": str(answer.get("animate") or "none"),
@@ -1363,12 +1306,12 @@ def ask_settings_line(chars_per_line):
         finish("Settings values are invalid. Try again.", failed=True)
     return {"model": MODEL, "lang": "" if language.lower() == "auto" else language,
             "gap": gap, "words": words, "chars": chars, "unit": "sentence",
-            "lyrics": "", "output": "subtitle", "template": "", "animate": "none",
+            "output": "subtitle", "template": "", "animate": "none",
             "peak": 1.3, "spacing": ""}
 
 
 def main():
-    global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT, LYRICS_PATH
+    global NOTIFY, MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, MAX_CHARS_PER_LINE, UNIT
     global OUTPUT, TEXTPLUS_TEMPLATE, ANIMATE, PEAK, SPACING
     NOTIFY = ("resolve" in globals())
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -1411,9 +1354,9 @@ def main():
         if NOTIFY:
             print("Cancelled by user.")
         return
-    MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, chars, UNIT, LYRICS_PATH = \
+    MODEL, LANGUAGE, SILENCE_GAP, MAX_WORDS, chars, UNIT = \
         choice["model"], choice["lang"], choice["gap"], choice["words"], \
-        choice["chars"], choice["unit"], choice["lyrics"]
+        choice["chars"], choice["unit"]
     OUTPUT = choice["output"]
     TEXTPLUS_TEMPLATE = choice["template"]
     _anim = str(choice.get("animate") or "none")
@@ -1426,8 +1369,6 @@ def main():
     if OUTPUT == "textplus" and not TEXTPLUS_TEMPLATE:
         finish("Text+ mode needs a template name.\n"
                "Create a Text+ template in the Media Pool and enter its name.", failed=True)
-    if LYRICS_PATH and not os.path.isfile(LYRICS_PATH):
-        finish("Lyrics file not found: %s" % LYRICS_PATH, failed=True)
     MAX_CHARS_PER_LINE = dict(MAX_CHARS_PER_LINE, **{orientation: chars})
     max_chars = MAX_CHARS_PER_LINE[orientation] * MAX_LINES
     model_status = "model '%s' is already downloaded" % MODEL if model_ready() \
@@ -1435,8 +1376,6 @@ def main():
     settings = ("Language: %s | Cue: %s | Silence gap: %.1fs | Words/cue: %d | Chars/line: %d"
                 % (LANGUAGE or "auto", UNIT, SILENCE_GAP, MAX_WORDS,
                    MAX_CHARS_PER_LINE[orientation]))
-    if LYRICS_PATH:
-        settings += " | Lyrics: %s" % os.path.basename(LYRICS_PATH)
     if OUTPUT == "textplus":
         _anim_label = {"fade": " + fade", "wordpop": " + wordpop"}.get(ANIMATE, "")
         settings += " | Output: Text+ (%s)%s" % (TEXTPLUS_TEMPLATE, _anim_label)
@@ -1458,8 +1397,7 @@ def main():
     with open(job_file, "w", encoding="utf-8") as handle:
         json.dump({"wav": wav, "srt": srt, "model": MODEL, "lang": LANGUAGE,
                    "max_chars": max_chars, "max_words": MAX_WORDS, "gap": SILENCE_GAP,
-                   "line_width": MAX_CHARS_PER_LINE[orientation], "unit": UNIT,
-                   "lyrics": LYRICS_PATH}, handle)
+                   "line_width": MAX_CHARS_PER_LINE[orientation], "unit": UNIT}, handle)
     log_line("srt: %s" % srt)
 
     code, tail = run_phase2(find_python(), job_file, os.path.join(work, "progress.log"))
