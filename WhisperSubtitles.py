@@ -67,7 +67,7 @@ LANGUAGE = ""           # "" = auto detect; "id" = Indonesian; "en" = English; "
 SILENCE_GAP = 0.6       # seconds. A pause longer than this splits the cue and hides the text
 MAX_WORDS = 8           # maximum number of words per subtitle
 UNIT = "sentence"       # "sentence" = per sentence (split when long) | "word" = one subtitle per word
-OUTPUT = "subtitle"     # "subtitle" | "textplus" | "textplus-karaoke" (Text+ + dimmed next-line preview)
+OUTPUT = "subtitle"     # "subtitle" | "textplus" (karaoke preview auto-enabled when template2 is set)
 TEXTPLUS_TEMPLATE = ""  # name of the Text+ template clip in the Media Pool (textplus mode)
 TEXTPLUS_TEMPLATE2 = ""  # optional second template for the karaoke next-line preview
 MAX_CHARS_PER_LINE = {"vertical": 20, "horizontal": 42}  # chars per line (phone vs wide screen)
@@ -284,12 +284,9 @@ unit.set("word - one subtitle per word" if initial.get("unit") == "word"
 unit.grid(row=4, column=1, sticky="we", pady=4)
 ttk.Label(box, text="Output").grid(row=5, column=0, sticky="w", pady=4, padx=(0, 14))
 output = ttk.Combobox(box, values=["subtitle - subtitle track (default)",
-                                   "textplus - Text+ clips from a template",
-                                   "textplus-karaoke - Text+ + next-line preview"],
+                                   "textplus - Text+ clips from a template"],
                       state="readonly", width=24)
-_output = initial.get("output") or "subtitle"
-output.set("textplus-karaoke - Text+ + next-line preview" if _output == "textplus-karaoke"
-           else "textplus - Text+ clips from a template" if _output == "textplus"
+output.set("textplus - Text+ clips from a template" if initial.get("output") == "textplus"
            else "subtitle - subtitle track (default)")
 output.grid(row=5, column=1, sticky="we", pady=4)
 ttk.Label(box, text="Text+ template (Media Pool)").grid(row=6, column=0, sticky="w", pady=4, padx=(0, 14))
@@ -325,9 +322,7 @@ def start():
     result.update(model=model.get(), lang=language.get().strip(), gap=gap_value,
                   words=words_value, chars=chars_value,
                   unit="word" if unit.get().startswith("word") else "sentence",
-                  output=("textplus-karaoke" if output.get().startswith("textplus-karaoke")
-                          else "textplus" if output.get().startswith("textplus")
-                          else "subtitle"),
+                  output="textplus" if output.get().startswith("textplus") else "subtitle",
                   template=template.get().strip(),
                   template2=template2.get().strip())
     root.destroy()
@@ -958,8 +953,7 @@ def ask_settings(chars_per_line):
                     "gap": float(answer["gap"]), "words": int(answer["words"]),
                     "chars": int(answer["chars"]),
                     "unit": "word" if answer.get("unit") == "word" else "sentence",
-                    "output": (answer.get("output") if answer.get("output") in
-                               ("textplus", "textplus-karaoke") else "subtitle"),
+                    "output": "textplus" if answer.get("output") == "textplus" else "subtitle",
                     "template": str(answer.get("template") or "").strip(),
                     "template2": str(answer.get("template2") or "").strip()}
         except (KeyError, TypeError, ValueError):
@@ -1061,7 +1055,7 @@ def main():
     OUTPUT = choice["output"]
     TEXTPLUS_TEMPLATE = choice["template"]
     TEXTPLUS_TEMPLATE2 = choice.get("template2", "")
-    if OUTPUT in ("textplus", "textplus-karaoke") and not TEXTPLUS_TEMPLATE:
+    if OUTPUT == "textplus" and not TEXTPLUS_TEMPLATE:
         finish("Text+ mode needs a template name.\n"
                "Create a Text+ template in the Media Pool and enter its name.", failed=True)
     MAX_CHARS_PER_LINE = dict(MAX_CHARS_PER_LINE, **{orientation: chars})
@@ -1071,9 +1065,8 @@ def main():
     settings = ("Language: %s | Cue: %s | Silence gap: %.1fs | Words/cue: %d | Chars/line: %d"
                 % (LANGUAGE or "auto", UNIT, SILENCE_GAP, MAX_WORDS,
                    MAX_CHARS_PER_LINE[orientation]))
-    if OUTPUT in ("textplus", "textplus-karaoke"):
-        _kind = (" + preview: %s" % TEXTPLUS_TEMPLATE2) if OUTPUT == "textplus-karaoke" and TEXTPLUS_TEMPLATE2 \
-            else " + preview: same template" if OUTPUT == "textplus-karaoke" else ""
+    if OUTPUT == "textplus":
+        _kind = " + preview: %s" % TEXTPLUS_TEMPLATE2 if TEXTPLUS_TEMPLATE2 else ""
         settings += " | Output: Text+ (%s)%s" % (TEXTPLUS_TEMPLATE, _kind)
     notify("Starting: %s | %s | %.0f seconds of audio" % (settings, model_status, duration))
     show_progress("TRANSCRIPTION IN PROGRESS\n"
@@ -1107,9 +1100,9 @@ def main():
                "Try setting Language to Indonesian in the settings form.", failed=True)
 
     problem = import_srt(resolve, srt)
-    if not problem and OUTPUT in ("textplus", "textplus-karaoke"):
+    if not problem and OUTPUT == "textplus":
         problem = make_textplus(project, srt, TEXTPLUS_TEMPLATE,
-                                karaoke=(OUTPUT == "textplus-karaoke"),
+                                karaoke=bool(TEXTPLUS_TEMPLATE2),
                                 preview_template=TEXTPLUS_TEMPLATE2)
     message = "Subtitles done: %s" % os.path.basename(srt)
     if problem:
