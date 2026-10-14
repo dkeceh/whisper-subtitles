@@ -2,14 +2,11 @@
 
 Automatic subtitles for **DaVinci Resolve (free)** — runs fully offline on your machine.
 
-> **Not compatible with DaVinci Resolve 21.1 (free).**
-> In 21.1, Blackmagic moved *all* Python scripting to the Studio edition —
-> release notes: *"We have moved the ability to script in Python to the Studio
-> version."* Free 21.1 no longer lists `.py` files in Workspace → Scripts
-> (Lua still works, but is sandboxed: no file IO, no subprocess), and the
-> external scripting API remains Studio-only. This script runs on
-> **21.0.x and older free** (tested on 21.0.2). Options on 21.1: stay on
-> 21.0.x, buy Studio, or wait for the planned CLI + Lua pipeline.
+> **Resolve 21.1 (free)?** Python scripting was moved to Studio in 21.1
+> ("We have moved the ability to script in Python to the Studio version"),
+> so the `WhisperSubtitles.py` menu script only works on **21.0.x and older
+> free**. On 21.1+ free use the **CLI + Lua pipeline** below — same results,
+> three quick steps.
 
 ## Function
 
@@ -26,7 +23,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 
 ## Features
 
-- **Offline & free** — works in DaVinci Resolve free (21.0.x only, see note above), no cloud services
+- **Offline & free** — works in DaVinci Resolve free, no cloud services (21.0.x: menu script; 21.1+: CLI + Lua pipeline)
 - **Settings form** — model (`tiny` … `large-v3`, plus `large-v3-turbo`), language (auto + 99 languages), cue per sentence or per word, silence gap, max words/chars
 - **Three outputs** — subtitle track + `.srt` file every run; optional Text+ clips, with karaoke next-line preview when a second template is set (see below)
 - **Text+ mode** — each cue becomes one Text+ clip on a new video track, copied from a template you design once in the Media Pool (fonts, colors, position all follow the template)
@@ -41,7 +38,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 | Component | Notes |
 |---|---|
 | macOS | Tested on macOS Golden Gate 27.0.1, Apple M1 8GB |
-| DaVinci Resolve | Tested on 21.0.2 Build 4 (free). **Does not work on 21.1+ free** (Python scripting moved to Studio) |
+| DaVinci Resolve | 21.0.x free (menu script) or 21.1+ free (CLI + Lua pipeline) |
 | Python 3 | With the `tkinter` module (included in the python.org installer) |
 | faster-whisper | `pip install faster-whisper` |
 | ffmpeg | `brew install ffmpeg` |
@@ -125,6 +122,76 @@ Text+ mode turns every subtitle line into its own **Text+ clip** on a new video 
 ### Karaoke next-line preview (Text+ mode)
 
 When you fill in *Text+ preview template* in the form, Text+ mode also adds a read-ahead preview: for every subtitle line, a second Text+ clip (copied from that second template) shows the *next* line's text for the same duration — like following lyrics. Style the preview however you want via that second Media Pool template (dimmer, lower, smaller). Leave the field empty for plain Text+ mode (no preview). The last line has no preview.
+
+### DaVinci Resolve 21.1+ (free): CLI + Lua pipeline
+
+Python menu scripts are Studio-only from 21.1, but the same result takes three
+steps: transcribe in the terminal, drag the `.srt` into Resolve, convert to
+Text+ with a small Lua script. No Studio, no cloud.
+
+**Install (once):**
+
+1. **Python 3** — [python.org](https://www.python.org/downloads/) (3.11+).
+2. **faster-whisper**: `pip3 install faster-whisper`
+3. **ffmpeg**: `brew install ffmpeg`
+4. **`srt2textplus.lua`** — copy into Resolve's script folder (create it if missing):
+
+   ```bash
+   cp srt2textplus.lua \
+     "~/Library/Application Support/Blackmagic Design/DaVinci Resolve/Fusion/Scripts/Utility/"
+   ```
+
+**Step 1 — transcribe the audio (terminal, no Resolve):**
+
+```bash
+python3 whisper_srt.py "path/to/your-file.mp4" --lang id
+```
+
+- **Choosing the file**: type the path, or just **drag the file from Finder
+  onto the Terminal window** — the full path is pasted for you.
+- **What it reads**: any media **ffmpeg** can open — video (`.mp4`, `.mov`,
+  `.mkv`, `.m4v`, …) or audio only (`.mp3`, `.m4a`, `.wav`, `.aiff`,
+  `.flac`, …). The video track is ignored; only audio is used.
+- **Where the `.srt` lands**: next to the input file, same name
+  (`your-file.srt`). Use `--out "somewhere/else.srt"` to put it anywhere.
+- Useful options (all optional):
+
+  | Option | Default | Notes |
+  |---|---|---|
+  | `--model` | `small` | `tiny`/`base`/`small`/`medium`/`large-v3`/`large-v3-turbo` — bigger = more accurate, slower |
+  | `--lang` | auto | `id`, `en`, `jw`, `su`, … — set it manually for music, auto can guess wrong |
+  | `--unit` | `sentence` | `word` = one subtitle per word (karaoke-style) |
+  | `--gap` | `0.6` | pause (seconds) that starts a new cue |
+  | `--words` | `8` | max words per cue |
+  | `--chars` | `42` | max characters per line |
+
+  First run downloads the model (one time, needs internet). Progress prints to
+  the terminal. Full list: `python3 whisper_srt.py --help`.
+
+**Step 2 — import into Resolve:**
+
+1. Open the project and the timeline you want subtitled.
+2. **Drag the `.srt` file from Finder onto the timeline** — Resolve creates a
+   subtitle track with one item per cue, timed exactly as in the file.
+   (The subtitle track and the Text+ track are independent: keep the subtitle
+   track for export/burn-in, or delete it after converting if you only want
+   Text+.)
+
+**Step 3 — convert to Text+ (optional, styled subtitles):**
+
+1. One-time: build a Text+ template clip in the Media Pool — see
+   [Output: Text+ clips](#output-text-clips) above (style a Text+, make it a
+   Fusion Clip, name it, e.g. `SubtitleText`). For karaoke preview, make a
+   second, differently-styled template (dimmer/lower) — e.g. `SubtitlePreview`.
+2. In the Media Pool, **select the template clip(s)**:
+   - **1 clip** → plain mode: one Text+ per cue, text = the spoken line.
+   - **2 clips** → karaoke mode: sorted by name — the first name becomes the
+     **active line** (top track, matches the voice), the second becomes the
+     **next-line preview** (lower track). The last cue has no preview.
+3. Run **Workspace → Scripts → Utility → srt2textplus**. A new video track
+   appears with one Text+ clip per cue, timing taken straight from the
+   subtitle track. Progress/errors go to
+   `~/Library/Application Support/Blackmagic Design/DaVinci Resolve/logs/ResolveDebug.txt`.
 
 ## License
 
