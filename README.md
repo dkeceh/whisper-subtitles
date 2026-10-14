@@ -2,6 +2,15 @@
 
 Automatic subtitles for **DaVinci Resolve (free)** — runs fully offline on your machine.
 
+> **Not compatible with DaVinci Resolve 21.1 (free).**
+> In 21.1, Blackmagic moved *all* Python scripting to the Studio edition —
+> release notes: *"We have moved the ability to script in Python to the Studio
+> version."* Free 21.1 no longer lists `.py` files in Workspace → Scripts
+> (Lua still works, but is sandboxed: no file IO, no subprocess), and the
+> external scripting API remains Studio-only. This script runs on
+> **21.0.x and older free** (tested on 21.0.2). Options on 21.1: stay on
+> 21.0.x, buy Studio, or wait for the planned CLI + Lua pipeline.
+
 ## Function
 
 Reads the audio of the active timeline, transcribes it with a Whisper model (faster-whisper), and produces subtitles for that timeline. The pipeline is:
@@ -17,7 +26,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 
 ## Features
 
-- **Offline & free** — works in DaVinci Resolve free, no cloud services
+- **Offline & free** — works in DaVinci Resolve free (21.0.x only, see note above), no cloud services
 - **Settings form** — model (`tiny` … `large-v3`, plus `large-v3-turbo`), language (auto + 99 languages), cue per sentence or per word, silence gap, max words/chars
 - **Three outputs** — subtitle track + `.srt` file every run; optional Text+ clips, with karaoke next-line preview when a second template is set (see below)
 - **Text+ mode** — each cue becomes one Text+ clip on a new video track, copied from a template you design once in the Media Pool (fonts, colors, position all follow the template)
@@ -32,7 +41,7 @@ No DaVinci Resolve Studio, cloud account, or internet connection required (excep
 | Component | Notes |
 |---|---|
 | macOS | Tested on macOS Golden Gate 27.0.1, Apple M1 8GB |
-| DaVinci Resolve | Tested on DaVinci Resolve 21.0.2 Build 4 (free) |
+| DaVinci Resolve | Tested on 21.0.2 Build 4 (free). **Does not work on 21.1+ free** (Python scripting moved to Studio) |
 | Python 3 | With the `tkinter` module (included in the python.org installer) |
 | faster-whisper | `pip install faster-whisper` |
 | ffmpeg | `brew install ffmpeg` |
